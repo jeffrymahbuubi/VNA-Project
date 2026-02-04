@@ -2,3 +2,6 @@
 code/LibreVNA-source
 .mcp.json
 software
+reports
+data
+__pycache__/
