@@ -1,0 +1,23 @@
+# Requirements for LibreVNA SCPI Examples and Data Analysis
+# Python version: 3.8+
+
+# Core numerical computing and data analysis
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0
+
+# Signal processing and RF/microwave analysis
+scikit-rf>=0.29.0  # RF and microwave engineering toolkit for S-parameter analysis
+
+# Data visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+
+# Additional utilities
+h5py>=3.8.0  # For HDF5 data storage
+scikit-learn>=1.2.0  # Machine learning and advanced data analysis
+
+# Note: The SCPI examples in Documentation/UserManual/SCPI_Examples use only
+# built-in Python modules (socket, threading, json, re, time).
+# The packages above are for post-processing, analysis, and visualization of VNA data.
