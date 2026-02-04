@@ -380,6 +380,44 @@ def connect_and_check(cal_summary):
         print("  [FAIL] " + msg)
         result["error_log"].append(msg)
 
+    # -- Step E: VNA:CALibration:LOAD? -- load calibration file into GUI ------
+    # Per the Programming Guide (4.3.55):
+    #   Syntax  : VNA:CALibration:LOAD? <filename>
+    #   Returns : TRUE or FALSE
+    #   Note    : filenames must be absolute or relative to the GUI application.
+    # After a successful load we confirm the active calibration type with:
+    #   Syntax  : VNA:CALibration:ACTIVE?   (ProgrammingGuide 4.3.45)
+    #   Returns : currently active calibration type (e.g. "SOLT")
+    # Both are queries -- use vna.query(), not vna.cmd().
+    # This step is non-fatal: a failure is logged and the script continues so
+    # that the consolidated info block can still print everything else.
+    _subsection("VNA:CAL:LOAD? -- loading calibration")
+    try:
+        cal_abs_path = os.path.normpath(os.path.abspath(CAL_FILE_PATH))
+        print("  Cal file path   : {}".format(cal_abs_path))
+
+        load_response = vna.query(":VNA:CAL:LOAD? " + cal_abs_path)
+        print("  LOAD? response  : {}".format(load_response))
+
+        if load_response == "TRUE":
+            active_cal = vna.query(":VNA:CAL:ACTIVE?")
+            print("  Active cal type : {}".format(active_cal))
+        else:
+            msg = (
+                "VNA:CALibration:LOAD? returned '{}' for file\n"
+                "    {}\n"
+                "  The GUI may not be able to access this path.  If the GUI\n"
+                "  runs on a different machine the path must be valid there.".format(
+                    load_response, cal_abs_path
+                )
+            )
+            print("  [WARN] " + msg)
+            result["error_log"].append(msg)
+    except Exception as exc:
+        msg = "VNA:CALibration:LOAD? query failed: {}".format(exc)
+        print("  [FAIL] " + msg)
+        result["error_log"].append(msg)
+
     return result
 
 

@@ -58,6 +58,12 @@ from datetime import datetime
 # Directory this script lives in.  libreVNA.py is co-located here.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# The SOLT calibration file produced by LibreVNA-GUI.
+# Layout: scripts/ is a sibling of calibration/ under LibreVNA-dev/
+CAL_FILE_PATH = os.path.normpath(
+    os.path.join(SCRIPT_DIR, "..", "calibration", "SOLT_1_2_43G-2_45G_300pt.cal")
+)
+
 # Insert SCRIPT_DIR at the front of sys.path so "from libreVNA import
 # libreVNA" resolves to the co-located wrapper regardless of cwd.
 sys.path.insert(0, SCRIPT_DIR)
@@ -180,6 +186,82 @@ def connect_and_verify() -> libreVNA:
         sys.exit(1)
 
     return vna
+
+
+
+# ===========================================================================
+# SECTION 1b  --  Calibration file loading via SCPI
+# ===========================================================================
+
+def load_calibration(vna: libreVNA) -> None:
+    """
+    Resolve the calibration file path, verify it exists on the local
+    filesystem, and load it into LibreVNA-GUI via SCPI.
+
+    The function sends two queries in order:
+
+      1. VNA:CALibration:LOAD? <filename>   (ProgrammingGuide 4.3.55)
+             Instructs the GUI to read and ingest the .cal file.
+             Returns "TRUE" on success, "FALSE" otherwise.
+             The filename must be absolute or relative to the GUI
+             application (see the note at the end of 4.3.54).
+
+      2. VNA:CALibration:ACTIVE?            (ProgrammingGuide 4.3.45)
+             Queries the currently active calibration type (e.g. "SOLT").
+             Sent only after a successful LOAD to confirm the GUI has
+             applied the calibration.
+
+    Both are queries -- vna.query() must be used, not vna.cmd().
+
+    Parameters
+    ----------
+    vna : libreVNA
+        Connected wrapper instance returned by connect_and_verify().
+
+    Raises
+    ------
+    SystemExit
+        If the file does not exist on disk or the LOAD query does not
+        return "TRUE".
+    """
+
+    _section("CALIBRATION LOADING")
+
+    # -- Resolve and validate the path ---------------------------------------
+    cal_abs_path = os.path.normpath(os.path.abspath(CAL_FILE_PATH))
+    print("  Cal file path   : {}".format(cal_abs_path))
+
+    if not os.path.isfile(cal_abs_path):
+        print("  [FAIL] Calibration file not found on disk:")
+        print("         {}".format(cal_abs_path))
+        print("         Verify the file exists and the relative path in")
+        print("         CAL_FILE_PATH is correct, then re-run.")
+        sys.exit(1)
+
+    print("  File exists     : YES")
+
+    # -- VNA:CALibration:LOAD? <filename> ------------------------------------
+    # ProgrammingGuide 4.3.55 -- query, returns TRUE or FALSE.
+    # Filenames must be absolute or relative to the GUI application; we
+    # always send the normalised absolute path to avoid ambiguity.
+    load_response = vna.query(":VNA:CAL:LOAD? " + cal_abs_path)
+    print("  LOAD? response  : {}".format(load_response))
+
+    if load_response != "TRUE":
+        print("  [FAIL] VNA:CALibration:LOAD? returned '{}'".format(load_response))
+        print("         Possible causes:")
+        print("           - The GUI process cannot access the path above")
+        print("             (e.g. it runs on a different machine or as a")
+        print("             different user).")
+        print("           - The file is not a valid LibreVNA calibration file.")
+        print("         Action: confirm the GUI can open the file manually,")
+        print("         then re-run this script.")
+        sys.exit(1)
+
+    # -- VNA:CALibration:ACTIVE? --------------------------------------------
+    # ProgrammingGuide 4.3.45 -- query, returns the active cal type string.
+    active_cal = vna.query(":VNA:CAL:ACTIVE?")
+    print("  Active cal type : {}".format(active_cal))
 
 
 # ===========================================================================
@@ -422,6 +504,11 @@ def main() -> None:
     # 1. Connect and verify
     # ------------------------------------------------------------------
     vna = connect_and_verify()
+
+    # ------------------------------------------------------------------
+    # 1b. Load calibration
+    # ------------------------------------------------------------------
+    load_calibration(vna)
 
     # ------------------------------------------------------------------
     # 2. Run the S11 sweep
