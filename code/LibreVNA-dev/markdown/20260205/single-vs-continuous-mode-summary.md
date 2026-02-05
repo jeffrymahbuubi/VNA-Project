@@ -5,7 +5,95 @@
 
 ---
 
-## 1. SCPI Command Differences
+## 1. High-Level Overview
+
+Both modes accomplish the same goal — collect a set of S11 sweeps from the
+VNA and save the results — but they differ in *how* data moves between the
+VNA and the script.
+
+| | Single Mode | Continuous Mode |
+|---|---|---|
+| **How data arrives** | Script asks the VNA for each sweep after it finishes | VNA streams data continuously; script collects it in the background |
+| **Threading** | Single thread — everything is sequential | Main thread waits; a background thread receives data |
+| **Setup complexity** | Minimal | Requires a streaming server to be running on port 19001 |
+| **Best suited for** | Simple benchmarks, debugging | Sustained high-rate acquisition |
+
+### Single Mode — "Ask and Wait"
+
+The script is in charge of the entire sweep cycle. It tells the VNA to
+take a sweep, repeatedly checks whether it is finished, then requests
+the result. Repeat.
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {
+  'primaryColor':'#3B82F6',
+  'primaryTextColor':'#ffffff',
+  'primaryBorderColor':'#2563EB',
+  'lineColor':'#6B7280',
+  'secondaryColor':'#10B981',
+  'tertiaryColor':'#F59E0B'
+}}}%%
+flowchart TD
+    A([Start]) --> B[Start VNA GUI &\nConnect to device]
+    B --> C[Load calibration file]
+    C --> D[Configure sweep\nfrequency range · points · IFBW]
+    D --> E[Trigger one sweep]
+    E --> F{Sweep finished?}
+    F -->|No — keep asking| F
+    F -->|Yes| G[Read trace data\nfrom VNA]
+    G --> H[Store result]
+    H --> I{More sweeps\nneeded?}
+    I -->|Yes| E
+    I -->|No| J[Save results to file]
+    J --> K([Done])
+
+    classDef pollNode fill:#F59E0B,stroke:#D97706,color:#000
+    class F pollNode
+```
+
+> **The orange diamond is the key behaviour:** single mode *polls* the VNA
+> — it keeps asking "are you done yet?" until the answer is yes.
+
+### Continuous Mode — "Stream and Collect"
+
+The VNA runs sweeps back-to-back on its own. A background stream delivers
+each data point as it is measured. The script simply watches the stream
+and assembles complete sweeps from the incoming points.
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {
+  'primaryColor':'#3B82F6',
+  'primaryTextColor':'#ffffff',
+  'primaryBorderColor':'#2563EB',
+  'lineColor':'#6B7280',
+  'secondaryColor':'#10B981',
+  'tertiaryColor':'#F59E0B'
+}}}%%
+flowchart TD
+    A([Start]) --> B[Start VNA GUI &\nConnect to device]
+    B --> C[Load calibration file]
+    C --> D[Open background\ndata stream]
+    D --> E[Configure sweep\nfrequency range · points · IFBW]
+    E --> F[Tell VNA to sweep\ncontinuously]
+    F --> G[/Data points arrive\nin the background/]
+    G --> H[Background callback\nassembles each sweep]
+    H --> I{Enough sweeps\ncollected?}
+    I -->|No — keep streaming| G
+    I -->|Yes| J[Stop acquisition\n& close stream]
+    J --> K[Save results to file]
+    K --> L([Done])
+
+    classDef streamNode fill:#10B981,stroke:#059669,color:#fff
+    class G streamNode
+    class H streamNode
+```
+
+> **The green nodes are the key behaviour:** continuous mode *streams* data
+> — the VNA pushes measurements and the script collects them passively.
+
+---
+
+## 2. SCPI Command Differences
 
 | Step | Single Mode | Continuous Mode |
 |------|-------------|-----------------|
@@ -30,7 +118,7 @@
 
 ---
 
-## 2. Core Logic Differences
+## 3. Core Logic Differences
 
 ### Single Mode — Synchronous, polling
 
@@ -65,7 +153,7 @@ Main thread starts acquisition; a background thread collects data.
 
 ---
 
-## 3. End-to-End Flow
+## 4. End-to-End Flow
 
 ### Single Mode
 
@@ -163,7 +251,7 @@ stop_gui()
 
 ---
 
-## Summary of Trade-offs
+## 5. Summary of Trade-offs
 
 | Dimension | Single Mode | Continuous Mode |
 |-----------|-------------|-----------------|
