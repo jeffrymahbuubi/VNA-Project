@@ -6,3 +6,4 @@ reports
 data
 __pycache__/
 skills
+.ipynb_checkpoints
