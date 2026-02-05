@@ -131,41 +131,42 @@ from libreVNA import libreVNA  # noqa: E402
 # manages the GUI lifecycle itself and needs RuntimeError, not sys.exit.
 # ---------------------------------------------------------------------------
 _mod2 = importlib.import_module("2_s11_cal_verification_sweep")
-load_calibration   = _mod2.load_calibration
+load_calibration = _mod2.load_calibration
 
 # ---------------------------------------------------------------------------
 # Module-level configuration constants
 # ---------------------------------------------------------------------------
 
 # -- GUI lifecycle ----------------------------------------------------------
-GUI_BINARY          = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
-SCPI_HOST           = "localhost"
-SCPI_PORT           = 1234
-GUI_START_TIMEOUT_S = 30.0   # max seconds to wait for SCPI server to come up
+GUI_BINARY = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
+SCPI_HOST = "localhost"
+SCPI_PORT = 1234
+GUI_START_TIMEOUT_S = 30.0  # max seconds to wait for SCPI server to come up
 
 # -- Sweep parameters (identical to scripts 3 and 4) ----------------------
-START_FREQ_HZ  = 2_430_000_000   # 2.430 GHz
-STOP_FREQ_HZ   = 2_450_000_000   # 2.450 GHz
-NUM_POINTS     = 300
-IFBW_HZ        = 50_000          # 50 kHz
-STIM_LVL_DBM   = -10
-AVG_COUNT      = 1               # single sweep, no moving average
+START_FREQ_HZ = 2_430_000_000  # 2.430 GHz
+STOP_FREQ_HZ = 2_450_000_000  # 2.450 GHz
+NUM_POINTS = 300
+IFBW_HZ = 10_000  # 50 kHz
+STIM_LVL_DBM = -10
+AVG_COUNT = 1  # single sweep, no moving average
 
 # -- Continuous-sweep benchmark parameters ---------------------------------
-NUM_SWEEPS        = 30           # total sweeps to collect
-STREAMING_PORT    = 19001        # VNA Calibrated Data streaming server port
-SWEEP_TIMEOUT_S   = 300          # hard ceiling on event.wait() (seconds)
+NUM_SWEEPS = 30  # total sweeps to collect
+STREAMING_PORT = 19001  # VNA Calibrated Data streaming server port
+SWEEP_TIMEOUT_S = 300  # hard ceiling on event.wait() (seconds)
 
 # -- Script 3 reference values (hardcoded from the baseline run) -----------
 # These are used only for the side-by-side comparison table.  If you re-run
 # script 3 and get different numbers, update these three constants.
-SCRIPT3_MEAN_CYCLE_S  = 0.1949   # mean cycle time (s)
-SCRIPT3_MEAN_RATE_HZ  = 5.13     # mean rate (Hz)
-SCRIPT3_STD_S         = 0.0012   # std dev of cycle time (s)
+SCRIPT3_MEAN_CYCLE_S = 0.1949  # mean cycle time (s)
+SCRIPT3_MEAN_RATE_HZ = 5.13  # mean rate (Hz)
+SCRIPT3_STD_S = 0.0012  # std dev of cycle time (s)
 
 # ---------------------------------------------------------------------------
 # Console-output helpers (identical style to scripts 1–4)
 # ---------------------------------------------------------------------------
+
 
 def _section(title: str) -> None:
     """Print a dashed section header."""
@@ -183,6 +184,7 @@ def _subsection(title: str) -> None:
 # ===========================================================================
 # GUI LIFECYCLE
 # ===========================================================================
+
 
 def start_gui():
     """
@@ -247,6 +249,7 @@ def stop_gui(proc):
 # DEVICE CONNECTION  --  local connect_and_verify (raises, does not exit)
 # ===========================================================================
 
+
 def connect_and_verify():
     """
     Open a TCP connection to LibreVNA-GUI and confirm a hardware device
@@ -261,14 +264,15 @@ def connect_and_verify():
     except Exception as exc:
         raise RuntimeError(
             "Could not connect to LibreVNA-GUI at {}:{}: {}".format(
-                SCPI_HOST, SCPI_PORT, exc)
+                SCPI_HOST, SCPI_PORT, exc
+            )
         )
 
     _subsection("*IDN? identification")
     try:
         idn_raw = vna.query("*IDN?")
         print("  Raw response    : {}".format(idn_raw))
-        parts  = [p.strip() for p in idn_raw.split(",")]
+        parts = [p.strip() for p in idn_raw.split(",")]
         labels = ["Manufacturer", "Model", "Serial (IDN)", "SW Version"]
         for label, val in zip(labels, parts):
             print("    {:<22s}: {}".format(label, val))
@@ -280,15 +284,11 @@ def connect_and_verify():
         dev_serial = vna.query(":DEV:CONN?")
         print("  Live serial     : {}".format(dev_serial))
         if dev_serial == "Not connected":
-            raise RuntimeError(
-                "LibreVNA-GUI is not connected to any hardware device."
-            )
+            raise RuntimeError("LibreVNA-GUI is not connected to any hardware device.")
     except RuntimeError:
         raise
     except Exception as exc:
-        raise RuntimeError(
-            "DEVice:CONNect? query failed: {}".format(exc)
-        )
+        raise RuntimeError("DEVice:CONNect? query failed: {}".format(exc))
 
     return vna
 
@@ -296,6 +296,7 @@ def connect_and_verify():
 # ===========================================================================
 # SECTION 1  --  Sweep configuration (full sequence including STOP)
 # ===========================================================================
+
 
 def configure_sweep(vna: libreVNA) -> None:
     """
@@ -338,8 +339,7 @@ def configure_sweep(vna: libreVNA) -> None:
 
     # VNA:ACquisition:IFBW  (ProgrammingGuide 4.3.13)
     vna.cmd(":VNA:ACQ:IFBW {}".format(IFBW_HZ))
-    print("  IF bandwidth    : {} Hz  ({} kHz)".format(
-        IFBW_HZ, IFBW_HZ / 1000))
+    print("  IF bandwidth    : {} Hz  ({} kHz)".format(IFBW_HZ, IFBW_HZ / 1000))
 
     # VNA:ACquisition:AVG  (ProgrammingGuide 4.3.16)
     vna.cmd(":VNA:ACQ:AVG {}".format(AVG_COUNT))
@@ -351,21 +351,28 @@ def configure_sweep(vna: libreVNA) -> None:
 
     # VNA:FREQuency:START  (ProgrammingGuide 4.3.3)
     vna.cmd(":VNA:FREQuency:START {}".format(START_FREQ_HZ))
-    print("  Start freq      : {} Hz  ({:.3f} GHz)".format(
-        START_FREQ_HZ, START_FREQ_HZ / 1e9))
+    print(
+        "  Start freq      : {} Hz  ({:.3f} GHz)".format(
+            START_FREQ_HZ, START_FREQ_HZ / 1e9
+        )
+    )
 
     # VNA:FREQuency:STOP  (ProgrammingGuide 4.3.5)
     # Included here (unlike scripts 3/4) because we are not using STOP as
     # a per-sweep trigger.  The GUI needs the complete window before we
     # enter continuous mode.
     vna.cmd(":VNA:FREQuency:STOP {}".format(STOP_FREQ_HZ))
-    print("  Stop freq       : {} Hz  ({:.3f} GHz)".format(
-        STOP_FREQ_HZ, STOP_FREQ_HZ / 1e9))
+    print(
+        "  Stop freq       : {} Hz  ({:.3f} GHz)".format(
+            STOP_FREQ_HZ, STOP_FREQ_HZ / 1e9
+        )
+    )
 
 
 # ===========================================================================
 # SECTION 2  --  Shared state and streaming callback
 # ===========================================================================
+
 
 class _SweepState:
     """
@@ -399,14 +406,14 @@ class _SweepState:
     """
 
     def __init__(self):
-        self.lock            = threading.Lock()
-        self.done_event      = threading.Event()
-        self.sweep_count     = 0
+        self.lock = threading.Lock()
+        self.done_event = threading.Event()
+        self.sweep_count = 0
         self.sweep_start_time = 0.0
-        self.sweep_end_times  = []   # list[float]
+        self.sweep_end_times = []  # list[float]
         self.sweep_start_times = []  # list[float]
-        self.current_s11      = []   # list[complex], current sweep
-        self.last_s11         = []   # list[complex], snapshot of last completed sweep
+        self.current_s11 = []  # list[complex], current sweep
+        self.last_s11 = []  # list[complex], snapshot of last completed sweep
 
 
 def make_callback(state: _SweepState) -> callable:
@@ -479,6 +486,7 @@ def make_callback(state: _SweepState) -> callable:
 # SECTION 3  --  Continuous acquisition orchestration
 # ===========================================================================
 
+
 def run_continuous_sweeps(vna: libreVNA) -> _SweepState:
     """
     Register the streaming callback, place the VNA into continuous sweep
@@ -514,7 +522,7 @@ def run_continuous_sweeps(vna: libreVNA) -> _SweepState:
 
     _section("CONTINUOUS SWEEP ACQUISITION  ({} sweeps)".format(NUM_SWEEPS))
 
-    state    = _SweepState()
+    state = _SweepState()
     callback = make_callback(state)
 
     # -- 1. Stop any pre-existing acquisition -------------------------------
@@ -535,11 +543,15 @@ def run_continuous_sweeps(vna: libreVNA) -> _SweepState:
     # the GUI this will raise an exception with a clear message.
     try:
         vna.add_live_callback(STREAMING_PORT, callback)
-        print("  Streaming       : callback registered on port {}".format(
-            STREAMING_PORT))
+        print(
+            "  Streaming       : callback registered on port {}".format(STREAMING_PORT)
+        )
     except Exception as exc:
-        print("  [FAIL] Could not connect to streaming server on port {}.".format(
-            STREAMING_PORT))
+        print(
+            "  [FAIL] Could not connect to streaming server on port {}.".format(
+                STREAMING_PORT
+            )
+        )
         print("         Detail: {}".format(exc))
         print("         Action: enable a VNA streaming server in the GUI:")
         print("                 Window >> Preferences >> Streaming Servers")
@@ -559,12 +571,13 @@ def run_continuous_sweeps(vna: libreVNA) -> _SweepState:
     if not completed:
         # Tear down before raising so the VNA is left in a clean state.
         vna.cmd(":VNA:ACQ:STOP")
-        vna.cmd(":VNA:ACQ:SINGLE TRUE")   # restore before raising
+        vna.cmd(":VNA:ACQ:SINGLE TRUE")  # restore before raising
         vna.remove_live_callback(STREAMING_PORT, callback)
         raise TimeoutError(
             "Only {}/{} sweeps received within {} s timeout.  "
             "Check streaming server connectivity and sweep parameters.".format(
-                state.sweep_count, NUM_SWEEPS, SWEEP_TIMEOUT_S)
+                state.sweep_count, NUM_SWEEPS, SWEEP_TIMEOUT_S
+            )
         )
 
     # -- 6. Stop continuous acquisition -------------------------------------
@@ -587,19 +600,24 @@ def run_continuous_sweeps(vna: libreVNA) -> _SweepState:
     # state lists, which are already fully populated by this point).
     with state.lock:
         for i in range(state.sweep_count):
-            duration  = state.sweep_end_times[i] - state.sweep_start_times[i]
-            dur_rate  = 1.0 / duration if duration > 0 else float('inf')
+            duration = state.sweep_end_times[i] - state.sweep_start_times[i]
+            dur_rate = 1.0 / duration if duration > 0 else float("inf")
             if i == 0:
-                print("  Sweep {:>2d}/{:<2d}  :  dur {:.4f} s  ({:.1f} Hz)  "
-                      "inter-sweep: --".format(
-                          i + 1, state.sweep_count, duration, dur_rate))
+                print(
+                    "  Sweep {:>2d}/{:<2d}  :  dur {:.4f} s  ({:.1f} Hz)  "
+                    "inter-sweep: --".format(
+                        i + 1, state.sweep_count, duration, dur_rate
+                    )
+                )
             else:
                 interval = state.sweep_end_times[i] - state.sweep_end_times[i - 1]
-                int_rate = 1.0 / interval if interval > 0 else float('inf')
-                print("  Sweep {:>2d}/{:<2d}  :  dur {:.4f} s  ({:.1f} Hz)  "
-                      "inter-sweep: {:.4f} s  ({:.1f} Hz)".format(
-                          i + 1, state.sweep_count, duration, dur_rate,
-                          interval, int_rate))
+                int_rate = 1.0 / interval if interval > 0 else float("inf")
+                print(
+                    "  Sweep {:>2d}/{:<2d}  :  dur {:.4f} s  ({:.1f} Hz)  "
+                    "inter-sweep: {:.4f} s  ({:.1f} Hz)".format(
+                        i + 1, state.sweep_count, duration, dur_rate, interval, int_rate
+                    )
+                )
 
     return state
 
@@ -607,6 +625,7 @@ def run_continuous_sweeps(vna: libreVNA) -> _SweepState:
 # ===========================================================================
 # SECTION 4  --  dB conversion (deferred, runs after the callback loop)
 # ===========================================================================
+
 
 def convert_last_trace(state: _SweepState) -> tuple:
     """
@@ -634,9 +653,7 @@ def convert_last_trace(state: _SweepState) -> tuple:
         (freq_hz, s11_db) -- both float64 arrays of length NUM_POINTS.
     """
 
-    freq_hz = np.linspace(float(START_FREQ_HZ),
-                          float(STOP_FREQ_HZ),
-                          NUM_POINTS)
+    freq_hz = np.linspace(float(START_FREQ_HZ), float(STOP_FREQ_HZ), NUM_POINTS)
 
     # Work from the snapshot taken under the lock by the callback.
     # No lock needed here -- the callback thread has exited and the
@@ -644,8 +661,8 @@ def convert_last_trace(state: _SweepState) -> tuple:
     raw_s11 = state.last_s11
 
     magnitudes = np.array([abs(c) for c in raw_s11])
-    magnitudes = np.maximum(magnitudes, 1e-12)   # clamp
-    s11_db     = 20.0 * np.log10(magnitudes)
+    magnitudes = np.maximum(magnitudes, 1e-12)  # clamp
+    s11_db = 20.0 * np.log10(magnitudes)
 
     return freq_hz, s11_db
 
@@ -653,6 +670,7 @@ def convert_last_trace(state: _SweepState) -> tuple:
 # ===========================================================================
 # SECTION 5  --  Statistics and console summary
 # ===========================================================================
+
 
 def print_timing_summary(state: _SweepState) -> None:
     """
@@ -670,16 +688,16 @@ def print_timing_summary(state: _SweepState) -> None:
     """
 
     # --- Derive raw arrays ------------------------------------------------
-    end_times   = np.array(state.sweep_end_times)     # shape (N,)
-    start_times = np.array(state.sweep_start_times)   # shape (N,)
+    end_times = np.array(state.sweep_end_times)  # shape (N,)
+    start_times = np.array(state.sweep_start_times)  # shape (N,)
 
-    durations       = end_times - start_times          # shape (N,)
-    duration_rates  = 1.0 / durations                  # Hz
+    durations = end_times - start_times  # shape (N,)
+    duration_rates = 1.0 / durations  # Hz
 
     # Inter-sweep intervals: end[N] - end[N-1], so length N-1.
     # Skip sweep 0 which has no predecessor.
-    intervals       = np.diff(end_times)               # shape (N-1,)
-    interval_rates  = 1.0 / intervals                  # Hz
+    intervals = np.diff(end_times)  # shape (N-1,)
+    interval_rates = 1.0 / intervals  # Hz
 
     # --- Table 1: CONTINUOUS SWEEP TIMING ---------------------------------
     _section("CONTINUOUS SWEEP TIMING")
@@ -687,37 +705,45 @@ def print_timing_summary(state: _SweepState) -> None:
     table1 = PrettyTable()
     table1.field_names = ["Metric", "Mean", "Std Dev", "Min", "Max"]
 
-    table1.add_row([
-        "Sweep Duration (s)",
-        "{:.4f}".format(float(np.mean(durations))),
-        "{:.4f}".format(float(np.std(durations, ddof=1))),
-        "{:.4f}".format(float(np.min(durations))),
-        "{:.4f}".format(float(np.max(durations)))
-    ])
+    table1.add_row(
+        [
+            "Sweep Duration (s)",
+            "{:.4f}".format(float(np.mean(durations))),
+            "{:.4f}".format(float(np.std(durations, ddof=1))),
+            "{:.4f}".format(float(np.min(durations))),
+            "{:.4f}".format(float(np.max(durations))),
+        ]
+    )
 
-    table1.add_row([
-        "Duration Rate (Hz)",
-        "{:.2f}".format(float(np.mean(duration_rates))),
-        "{:.2f}".format(float(np.std(duration_rates, ddof=1))),
-        "{:.2f}".format(float(np.min(duration_rates))),
-        "{:.2f}".format(float(np.max(duration_rates)))
-    ])
+    table1.add_row(
+        [
+            "Duration Rate (Hz)",
+            "{:.2f}".format(float(np.mean(duration_rates))),
+            "{:.2f}".format(float(np.std(duration_rates, ddof=1))),
+            "{:.2f}".format(float(np.min(duration_rates))),
+            "{:.2f}".format(float(np.max(duration_rates))),
+        ]
+    )
 
-    table1.add_row([
-        "Inter-Sweep Interval (s)",
-        "{:.4f}".format(float(np.mean(intervals))),
-        "{:.4f}".format(float(np.std(intervals, ddof=1))),
-        "{:.4f}".format(float(np.min(intervals))),
-        "{:.4f}".format(float(np.max(intervals)))
-    ])
+    table1.add_row(
+        [
+            "Inter-Sweep Interval (s)",
+            "{:.4f}".format(float(np.mean(intervals))),
+            "{:.4f}".format(float(np.std(intervals, ddof=1))),
+            "{:.4f}".format(float(np.min(intervals))),
+            "{:.4f}".format(float(np.max(intervals))),
+        ]
+    )
 
-    table1.add_row([
-        "Inter-Sweep Rate (Hz)",
-        "{:.2f}".format(float(np.mean(interval_rates))),
-        "{:.2f}".format(float(np.std(interval_rates, ddof=1))),
-        "{:.2f}".format(float(np.min(interval_rates))),
-        "{:.2f}".format(float(np.max(interval_rates)))
-    ])
+    table1.add_row(
+        [
+            "Inter-Sweep Rate (Hz)",
+            "{:.2f}".format(float(np.mean(interval_rates))),
+            "{:.2f}".format(float(np.std(interval_rates, ddof=1))),
+            "{:.2f}".format(float(np.min(interval_rates))),
+            "{:.2f}".format(float(np.max(interval_rates))),
+        ]
+    )
 
     print(table1)
 
@@ -727,54 +753,67 @@ def print_timing_summary(state: _SweepState) -> None:
     # Use inter-sweep interval as the "cycle time" for the continuous run
     # because it is the direct equivalent of script 3's end-to-end wall
     # time per cycle.
-    cont_mean_cycle_s  = float(np.mean(intervals))
-    cont_mean_rate_hz  = float(np.mean(interval_rates))
-    cont_std_s         = float(np.std(intervals, ddof=1))
+    cont_mean_cycle_s = float(np.mean(intervals))
+    cont_mean_rate_hz = float(np.mean(interval_rates))
+    cont_std_s = float(np.std(intervals, ddof=1))
 
     # Speedup for times: script3 / script5 (bigger script3 value means
     # script5 is faster -> speedup > 1).
     # Speedup for rates: script5 / script3 (bigger script5 rate means
     # script5 is faster -> speedup > 1).
-    speedup_cycle = SCRIPT3_MEAN_CYCLE_S / cont_mean_cycle_s if cont_mean_cycle_s > 0 else float('inf')
-    speedup_rate  = cont_mean_rate_hz    / SCRIPT3_MEAN_RATE_HZ if SCRIPT3_MEAN_RATE_HZ > 0 else float('inf')
-    speedup_std   = SCRIPT3_STD_S        / cont_std_s           if cont_std_s > 0 else float('inf')
+    speedup_cycle = (
+        SCRIPT3_MEAN_CYCLE_S / cont_mean_cycle_s
+        if cont_mean_cycle_s > 0
+        else float("inf")
+    )
+    speedup_rate = (
+        cont_mean_rate_hz / SCRIPT3_MEAN_RATE_HZ
+        if SCRIPT3_MEAN_RATE_HZ > 0
+        else float("inf")
+    )
+    speedup_std = SCRIPT3_STD_S / cont_std_s if cont_std_s > 0 else float("inf")
 
     table2 = PrettyTable()
     table2.field_names = [
         "Metric",
         "Single-Sweep (Script 3)",
         "Continuous (Script 5)",
-        "Speedup"
+        "Speedup",
     ]
 
-    table2.add_row([
-        "Mean cycle time (s)",
-        "{:.4f}".format(SCRIPT3_MEAN_CYCLE_S),
-        "{:.4f}".format(cont_mean_cycle_s),
-        "{:.2f}x".format(speedup_cycle)
-    ])
+    table2.add_row(
+        [
+            "Mean cycle time (s)",
+            "{:.4f}".format(SCRIPT3_MEAN_CYCLE_S),
+            "{:.4f}".format(cont_mean_cycle_s),
+            "{:.2f}x".format(speedup_cycle),
+        ]
+    )
 
-    table2.add_row([
-        "Mean rate (Hz)",
-        "{:.2f}".format(SCRIPT3_MEAN_RATE_HZ),
-        "{:.2f}".format(cont_mean_rate_hz),
-        "{:.2f}x".format(speedup_rate)
-    ])
+    table2.add_row(
+        [
+            "Mean rate (Hz)",
+            "{:.2f}".format(SCRIPT3_MEAN_RATE_HZ),
+            "{:.2f}".format(cont_mean_rate_hz),
+            "{:.2f}x".format(speedup_rate),
+        ]
+    )
 
-    table2.add_row([
-        "Std Dev (s)",
-        "{:.4f}".format(SCRIPT3_STD_S),
-        "{:.4f}".format(cont_std_s),
-        "{:.2f}x".format(speedup_std)
-    ])
+    table2.add_row(
+        [
+            "Std Dev (s)",
+            "{:.4f}".format(SCRIPT3_STD_S),
+            "{:.4f}".format(cont_std_s),
+            "{:.2f}x".format(speedup_std),
+        ]
+    )
 
     print(table2)
 
     # --- 25 Hz target assessment --------------------------------------------
     target_hz = 25.0
     print("\n  Target update rate : {:.1f} Hz".format(target_hz))
-    print("  Measured mean rate : {:.2f} Hz  (inter-sweep)".format(
-        cont_mean_rate_hz))
+    print("  Measured mean rate : {:.2f} Hz  (inter-sweep)".format(cont_mean_rate_hz))
     if cont_mean_rate_hz >= target_hz:
         print("  Status             : MEETS TARGET")
     else:
@@ -784,6 +823,7 @@ def print_timing_summary(state: _SweepState) -> None:
 # ===========================================================================
 # SECTION 6  --  CSV export
 # ===========================================================================
+
 
 def save_timing_csv(state: _SweepState) -> str:
     """
@@ -809,42 +849,48 @@ def save_timing_csv(state: _SweepState) -> str:
     os.makedirs(output_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename  = "continuous_sweep_speed_{}.csv".format(timestamp)
+    filename = "continuous_sweep_speed_{}.csv".format(timestamp)
     full_path = os.path.join(output_dir, filename)
 
     with open(full_path, "w", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow([
-            "Sweep_Number",
-            "Duration_s",
-            "InterSweep_Interval_s",
-            "Duration_Rate_Hz",
-            "InterSweep_Rate_Hz"
-        ])
+        writer.writerow(
+            [
+                "Sweep_Number",
+                "Duration_s",
+                "InterSweep_Interval_s",
+                "Duration_Rate_Hz",
+                "InterSweep_Rate_Hz",
+            ]
+        )
 
         for i in range(state.sweep_count):
-            duration     = state.sweep_end_times[i] - state.sweep_start_times[i]
-            dur_rate     = 1.0 / duration if duration > 0 else float('inf')
+            duration = state.sweep_end_times[i] - state.sweep_start_times[i]
+            dur_rate = 1.0 / duration if duration > 0 else float("inf")
 
             if i == 0:
                 # No predecessor -- leave inter-sweep columns blank.
-                writer.writerow([
-                    i + 1,
-                    "{:.6f}".format(duration),
-                    "",
-                    "{:.4f}".format(dur_rate),
-                    ""
-                ])
+                writer.writerow(
+                    [
+                        i + 1,
+                        "{:.6f}".format(duration),
+                        "",
+                        "{:.4f}".format(dur_rate),
+                        "",
+                    ]
+                )
             else:
                 interval = state.sweep_end_times[i] - state.sweep_end_times[i - 1]
-                int_rate = 1.0 / interval if interval > 0 else float('inf')
-                writer.writerow([
-                    i + 1,
-                    "{:.6f}".format(duration),
-                    "{:.6f}".format(interval),
-                    "{:.4f}".format(dur_rate),
-                    "{:.4f}".format(int_rate)
-                ])
+                int_rate = 1.0 / interval if interval > 0 else float("inf")
+                writer.writerow(
+                    [
+                        i + 1,
+                        "{:.6f}".format(duration),
+                        "{:.6f}".format(interval),
+                        "{:.4f}".format(dur_rate),
+                        "{:.4f}".format(int_rate),
+                    ]
+                )
 
     return full_path
 
@@ -874,7 +920,7 @@ def save_trace_csv(freq_hz: np.ndarray, s11_db: np.ndarray) -> str:
     os.makedirs(output_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename  = "continuous_sweep_last_trace_{}.csv".format(timestamp)
+    filename = "continuous_sweep_last_trace_{}.csv".format(timestamp)
     full_path = os.path.join(output_dir, filename)
 
     with open(full_path, "w", newline="") as fh:
@@ -889,6 +935,7 @@ def save_trace_csv(freq_hz: np.ndarray, s11_db: np.ndarray) -> str:
 # ===========================================================================
 # main
 # ===========================================================================
+
 
 def main() -> None:
     """
@@ -924,10 +971,12 @@ def main() -> None:
         # --------------------------------------------------------------
         _section("TRACE CONVERSION")
         freq_hz, s11_db = convert_last_trace(state)
-        print("  Converted       : {} points (linspace freq axis)".format(
-            len(freq_hz)))
-        print("  S11 range       : {:.2f} dB  to  {:.2f} dB".format(
-            float(np.min(s11_db)), float(np.max(s11_db))))
+        print("  Converted       : {} points (linspace freq axis)".format(len(freq_hz)))
+        print(
+            "  S11 range       : {:.2f} dB  to  {:.2f} dB".format(
+                float(np.min(s11_db)), float(np.max(s11_db))
+            )
+        )
 
         # --------------------------------------------------------------
         # 5. Print timing statistics and comparison tables

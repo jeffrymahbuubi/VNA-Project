@@ -95,31 +95,32 @@ load_calibration = _mod2.load_calibration
 # ---------------------------------------------------------------------------
 
 # -- GUI lifecycle ----------------------------------------------------------
-GUI_BINARY          = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
-SCPI_HOST           = "localhost"
-SCPI_PORT           = 1234
-GUI_START_TIMEOUT_S = 30.0   # max seconds to wait for SCPI server to come up
+GUI_BINARY = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
+SCPI_HOST = "localhost"
+SCPI_PORT = 1234
+GUI_START_TIMEOUT_S = 30.0  # max seconds to wait for SCPI server to come up
 
 # -- Sweep parameters (same span / points / power as the baseline) ----------
-START_FREQ_HZ  = 2_430_000_000   # 2.430 GHz
-STOP_FREQ_HZ   = 2_450_000_000   # 2.450 GHz
-NUM_POINTS     = 300
-STIM_LVL_DBM   = -10
-AVG_COUNT      = 1
+START_FREQ_HZ = 2_430_000_000  # 2.430 GHz
+STOP_FREQ_HZ = 2_450_000_000  # 2.450 GHz
+NUM_POINTS = 300
+STIM_LVL_DBM = -10
+AVG_COUNT = 1
 
 # -- IFBW values to characterise (tested in this order) ---------------------
-IFBW_VALUES_HZ = [50_000, 10_000, 1_000]   # 50 kHz, 10 kHz, 1 kHz
+IFBW_VALUES_HZ = [50_000, 10_000, 1_000]  # 50 kHz, 10 kHz, 1 kHz
 
 # -- Per-IFBW sweep count ---------------------------------------------------
-SWEEPS_PER_IFBW = 10
+SWEEPS_PER_IFBW = 30
 
 # -- Polling / timeout ------------------------------------------------------
-POLL_INTERVAL_S   = 0.01
-SWEEP_TIMEOUT_S   = 60.0
+POLL_INTERVAL_S = 0.01
+SWEEP_TIMEOUT_S = 60.0
 
 # ---------------------------------------------------------------------------
 # Console-output helpers (identical style to scripts 1, 2, and 3)
 # ---------------------------------------------------------------------------
+
 
 def _section(title: str) -> None:
     width = 70
@@ -135,6 +136,7 @@ def _subsection(title: str) -> None:
 # ===========================================================================
 # GUI LIFECYCLE
 # ===========================================================================
+
 
 def start_gui():
     """
@@ -199,6 +201,7 @@ def stop_gui(proc):
 # DEVICE CONNECTION  --  local connect_and_verify (raises, does not exit)
 # ===========================================================================
 
+
 def connect_and_verify():
     """
     Open a TCP connection to LibreVNA-GUI and confirm a hardware device
@@ -213,14 +216,15 @@ def connect_and_verify():
     except Exception as exc:
         raise RuntimeError(
             "Could not connect to LibreVNA-GUI at {}:{}: {}".format(
-                SCPI_HOST, SCPI_PORT, exc)
+                SCPI_HOST, SCPI_PORT, exc
+            )
         )
 
     _subsection("*IDN? identification")
     try:
         idn_raw = vna.query("*IDN?")
         print("  Raw response    : {}".format(idn_raw))
-        parts  = [p.strip() for p in idn_raw.split(",")]
+        parts = [p.strip() for p in idn_raw.split(",")]
         labels = ["Manufacturer", "Model", "Serial (IDN)", "SW Version"]
         for label, val in zip(labels, parts):
             print("    {:<22s}: {}".format(label, val))
@@ -232,15 +236,11 @@ def connect_and_verify():
         dev_serial = vna.query(":DEV:CONN?")
         print("  Live serial     : {}".format(dev_serial))
         if dev_serial == "Not connected":
-            raise RuntimeError(
-                "LibreVNA-GUI is not connected to any hardware device."
-            )
+            raise RuntimeError("LibreVNA-GUI is not connected to any hardware device.")
     except RuntimeError:
         raise
     except Exception as exc:
-        raise RuntimeError(
-            "DEVice:CONNect? query failed: {}".format(exc)
-        )
+        raise RuntimeError("DEVice:CONNect? query failed: {}".format(exc))
 
     return vna
 
@@ -248,6 +248,7 @@ def connect_and_verify():
 # ===========================================================================
 # SECTION 1  --  Sweep configuration (everything EXCEPT STOP)
 # ===========================================================================
+
 
 def configure_sweep(vna: libreVNA, ifbw_hz: int) -> None:
     """
@@ -287,8 +288,7 @@ def configure_sweep(vna: libreVNA, ifbw_hz: int) -> None:
 
     # VNA:ACquisition:IFBW  (ProgrammingGuide 4.3.13)
     vna.cmd(":VNA:ACQ:IFBW {}".format(ifbw_hz))
-    print("  IF bandwidth    : {} Hz  ({} kHz)".format(
-        ifbw_hz, ifbw_hz / 1000))
+    print("  IF bandwidth    : {} Hz  ({} kHz)".format(ifbw_hz, ifbw_hz / 1000))
 
     vna.cmd(":VNA:ACQ:AVG {}".format(AVG_COUNT))
     print("  Averaging       : {} sweep(s)".format(AVG_COUNT))
@@ -298,8 +298,11 @@ def configure_sweep(vna: libreVNA, ifbw_hz: int) -> None:
 
     # START only -- STOP is the trigger, sent by the caller.
     vna.cmd(":VNA:FREQuency:START {}".format(START_FREQ_HZ))
-    print("  Start freq      : {} Hz  ({:.3f} GHz)".format(
-        START_FREQ_HZ, START_FREQ_HZ / 1e9))
+    print(
+        "  Start freq      : {} Hz  ({:.3f} GHz)".format(
+            START_FREQ_HZ, START_FREQ_HZ / 1e9
+        )
+    )
     print("  Stop freq       : (will be sent as sweep trigger)")
 
 
@@ -307,8 +310,10 @@ def configure_sweep(vna: libreVNA, ifbw_hz: int) -> None:
 # SECTION 2  --  Per-IFBW sweep loop
 # ===========================================================================
 
-def run_ifbw_test(vna: libreVNA, ifbw_hz: int,
-                  num_sweeps: int = SWEEPS_PER_IFBW) -> tuple:
+
+def run_ifbw_test(
+    vna: libreVNA, ifbw_hz: int, num_sweeps: int = SWEEPS_PER_IFBW
+) -> tuple:
     """
     Run num_sweeps consecutive S11 sweeps at the given IFBW and collect
     all timing and trace data.
@@ -341,12 +346,13 @@ def run_ifbw_test(vna: libreVNA, ifbw_hz: int,
         If any single sweep does not finish within SWEEP_TIMEOUT_S.
     """
 
-    _subsection("Running {} sweeps at IFBW = {} kHz".format(
-        num_sweeps, ifbw_hz // 1000))
+    _subsection(
+        "Running {} sweeps at IFBW = {} kHz".format(num_sweeps, ifbw_hz // 1000)
+    )
 
     sweep_times = []
-    all_s11_db  = []   # list of lists
-    freq_hz     = []   # populated on the first sweep, reused thereafter
+    all_s11_db = []  # list of lists
+    freq_hz = []  # populated on the first sweep, reused thereafter
 
     for i in range(num_sweeps):
 
@@ -366,22 +372,22 @@ def run_ifbw_test(vna: libreVNA, ifbw_hz: int,
                 raise TimeoutError(
                     "IFBW={} kHz, sweep {}/{}: VNA:ACQ:FIN? did not return "
                     "TRUE within {:.0f} s (last response: '{}')".format(
-                        ifbw_hz // 1000, i + 1, num_sweeps,
-                        SWEEP_TIMEOUT_S, finished)
+                        ifbw_hz // 1000, i + 1, num_sweeps, SWEEP_TIMEOUT_S, finished
+                    )
                 )
             time.sleep(POLL_INTERVAL_S)
 
         # -- Time: end --------------------------------------------------------
-        t_end      = time.time()
+        t_end = time.time()
         sweep_time = t_end - t_start
         sweep_times.append(sweep_time)
 
         # -- Read trace (outside timed window) --------------------------------
         raw_data = vna.query(":VNA:TRACE:DATA? S11")
-        trace    = libreVNA.parse_VNA_trace_data(raw_data)
+        trace = libreVNA.parse_VNA_trace_data(raw_data)
 
         # -- Convert to dB ----------------------------------------------------
-        sweep_freq  = []
+        sweep_freq = []
         sweep_s11db = []
         for fq, gamma in trace:
             magnitude = abs(gamma)
@@ -398,9 +404,12 @@ def run_ifbw_test(vna: libreVNA, ifbw_hz: int,
         all_s11_db.append(sweep_s11db)
 
         # -- Progress line ----------------------------------------------------
-        update_rate = 1.0 / sweep_time if sweep_time > 0 else float('inf')
-        print("    Sweep {:>2d}/{:<2d}  :  {:.4f} s  ({:.1f} Hz)".format(
-            i + 1, num_sweeps, sweep_time, update_rate))
+        update_rate = 1.0 / sweep_time if sweep_time > 0 else float("inf")
+        print(
+            "    Sweep {:>2d}/{:<2d}  :  {:.4f} s  ({:.1f} Hz)".format(
+                i + 1, num_sweeps, sweep_time, update_rate
+            )
+        )
 
     return sweep_times, all_s11_db, freq_hz
 
@@ -408,6 +417,7 @@ def run_ifbw_test(vna: libreVNA, ifbw_hz: int,
 # ===========================================================================
 # SECTION 3  --  Metric computation
 # ===========================================================================
+
 
 def compute_metrics(sweep_times: list, all_s11_db: list) -> dict:
     """
@@ -444,31 +454,32 @@ def compute_metrics(sweep_times: list, all_s11_db: list) -> dict:
     repeatability without sensitivity to absolute offset.
     """
 
-    times_arr = np.array(sweep_times)                # shape (N,)
-    s11_arr   = np.array(all_s11_db)                 # shape (N, P)
+    times_arr = np.array(sweep_times)  # shape (N,)
+    s11_arr = np.array(all_s11_db)  # shape (N, P)
 
     mean_sweep_time = float(np.mean(times_arr))
-    update_rate     = 1.0 / mean_sweep_time if mean_sweep_time > 0 else float('inf')
+    update_rate = 1.0 / mean_sweep_time if mean_sweep_time > 0 else float("inf")
 
     # Noise floor: mean of per-sweep means
-    per_sweep_means = np.mean(s11_arr, axis=1)       # shape (N,)
-    noise_floor     = float(np.mean(per_sweep_means))
+    per_sweep_means = np.mean(s11_arr, axis=1)  # shape (N,)
+    noise_floor = float(np.mean(per_sweep_means))
 
     # Trace jitter: mean of per-point stds across sweeps
-    per_point_stds  = np.std(s11_arr, axis=0, ddof=1)  # shape (P,)
-    trace_jitter    = float(np.mean(per_point_stds))
+    per_point_stds = np.std(s11_arr, axis=0, ddof=1)  # shape (P,)
+    trace_jitter = float(np.mean(per_point_stds))
 
     return {
         "mean_sweep_time": mean_sweep_time,
-        "update_rate":     update_rate,
-        "noise_floor":     noise_floor,
-        "trace_jitter":    trace_jitter,
+        "update_rate": update_rate,
+        "noise_floor": noise_floor,
+        "trace_jitter": trace_jitter,
     }
 
 
 # ===========================================================================
 # SECTION 4  --  Console output
 # ===========================================================================
+
 
 def print_comparison_table(results: list) -> None:
     """
@@ -489,17 +500,19 @@ def print_comparison_table(results: list) -> None:
         "Mean Sweep Time (s)",
         "Update Rate (Hz)",
         "Noise Floor (dB)",
-        "Trace Jitter (dB)"
+        "Trace Jitter (dB)",
     ]
 
     for r in results:
-        table.add_row([
-            "{:>d}".format(r["ifbw_hz"] // 1000),
-            "{:.4f}".format(r["mean_sweep_time"]),
-            "{:.2f}".format(r["update_rate"]),
-            "{:.2f}".format(r["noise_floor"]),
-            "{:.4f}".format(r["trace_jitter"])
-        ])
+        table.add_row(
+            [
+                "{:>d}".format(r["ifbw_hz"] // 1000),
+                "{:.4f}".format(r["mean_sweep_time"]),
+                "{:.2f}".format(r["update_rate"]),
+                "{:.2f}".format(r["noise_floor"]),
+                "{:.4f}".format(r["trace_jitter"]),
+            ]
+        )
 
     print(table)
 
@@ -507,6 +520,7 @@ def print_comparison_table(results: list) -> None:
 # ===========================================================================
 # SECTION 5  --  CSV output
 # ===========================================================================
+
 
 def save_traces_csv(ifbw_hz: int, freq_hz: list, all_s11_db: list) -> str:
     """
@@ -528,10 +542,10 @@ def save_traces_csv(ifbw_hz: int, freq_hz: list, all_s11_db: list) -> str:
     )
     os.makedirs(output_dir, exist_ok=True)
 
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    ifbw_khz   = ifbw_hz // 1000
-    filename   = "ifbw_{}kHz_traces_{}.csv".format(ifbw_khz, timestamp)
-    full_path  = os.path.join(output_dir, filename)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ifbw_khz = ifbw_hz // 1000
+    filename = "ifbw_{}kHz_traces_{}.csv".format(ifbw_khz, timestamp)
+    full_path = os.path.join(output_dir, filename)
 
     num_sweeps = len(all_s11_db)
 
@@ -570,25 +584,32 @@ def save_summary_csv(results: list) -> str:
     os.makedirs(output_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename  = "ifbw_sweep_summary_{}.csv".format(timestamp)
+    filename = "ifbw_sweep_summary_{}.csv".format(timestamp)
     full_path = os.path.join(output_dir, filename)
 
     with open(full_path, "w", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow([
-            "IFBW_Hz", "IFBW_kHz",
-            "Mean_Sweep_Time_s", "Update_Rate_Hz",
-            "Noise_Floor_dB", "Trace_Jitter_dB"
-        ])
+        writer.writerow(
+            [
+                "IFBW_Hz",
+                "IFBW_kHz",
+                "Mean_Sweep_Time_s",
+                "Update_Rate_Hz",
+                "Noise_Floor_dB",
+                "Trace_Jitter_dB",
+            ]
+        )
         for r in results:
-            writer.writerow([
-                r["ifbw_hz"],
-                r["ifbw_hz"] // 1000,
-                "{:.6f}".format(r["mean_sweep_time"]),
-                "{:.4f}".format(r["update_rate"]),
-                "{:.4f}".format(r["noise_floor"]),
-                "{:.6f}".format(r["trace_jitter"])
-            ])
+            writer.writerow(
+                [
+                    r["ifbw_hz"],
+                    r["ifbw_hz"] // 1000,
+                    "{:.6f}".format(r["mean_sweep_time"]),
+                    "{:.4f}".format(r["update_rate"]),
+                    "{:.4f}".format(r["noise_floor"]),
+                    "{:.6f}".format(r["trace_jitter"]),
+                ]
+            )
 
     return full_path
 
@@ -596,6 +617,7 @@ def save_summary_csv(results: list) -> str:
 # ===========================================================================
 # main
 # ===========================================================================
+
 
 def main() -> None:
     """
@@ -620,7 +642,7 @@ def main() -> None:
         # --------------------------------------------------------------
         # Accumulates one result dict per IFBW value.  Also accumulates
         # per-IFBW trace data for the multi-sweep CSVs.
-        all_results = []   # list of result dicts (with ifbw_hz added)
+        all_results = []  # list of result dicts (with ifbw_hz added)
 
         for ifbw_hz in IFBW_VALUES_HZ:
 
@@ -634,24 +656,19 @@ def main() -> None:
 
             # -- Compute metrics --------------------------------------
             metrics = compute_metrics(sweep_times, all_s11_db)
-            metrics["ifbw_hz"] = ifbw_hz   # tag for table / CSV output
+            metrics["ifbw_hz"] = ifbw_hz  # tag for table / CSV output
 
             # -- Per-IFBW progress summary ----------------------------
             _subsection("IFBW {} kHz -- metrics".format(ifbw_hz // 1000))
-            print("    Mean sweep time : {:.4f} s".format(
-                metrics["mean_sweep_time"]))
-            print("    Update rate     : {:.2f} Hz".format(
-                metrics["update_rate"]))
-            print("    Noise floor     : {:.2f} dB".format(
-                metrics["noise_floor"]))
-            print("    Trace jitter    : {:.4f} dB".format(
-                metrics["trace_jitter"]))
+            print("    Mean sweep time : {:.4f} s".format(metrics["mean_sweep_time"]))
+            print("    Update rate     : {:.2f} Hz".format(metrics["update_rate"]))
+            print("    Noise floor     : {:.2f} dB".format(metrics["noise_floor"]))
+            print("    Trace jitter    : {:.4f} dB".format(metrics["trace_jitter"]))
 
             all_results.append(metrics)
 
             # -- Save multi-sweep trace CSV for this IFBW -------------
-            _subsection("Saving traces for IFBW {} kHz".format(
-                ifbw_hz // 1000))
+            _subsection("Saving traces for IFBW {} kHz".format(ifbw_hz // 1000))
             traces_path = save_traces_csv(ifbw_hz, freq_hz, all_s11_db)
             print("    Traces CSV      : {}".format(traces_path))
 
