@@ -4,7 +4,7 @@ configurations:
   num_points: 300
   stim_lvl_dbm: -10
   avg_count: 1
-  num_sweeps: 10                   # sweeps per IFBW value
+  num_sweeps: 30                   # sweeps per IFBW value
 
 target:
   ifbw_values:                     # single int OR list of ints in Hz
