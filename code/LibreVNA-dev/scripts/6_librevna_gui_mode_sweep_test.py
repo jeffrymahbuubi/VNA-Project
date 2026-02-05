@@ -27,7 +27,7 @@ SCPI commands used -- all documented in ProgrammingGuide.pdf
   VNA:ACquisition:AVG  <n>     4.3.16  averaging count
   VNA:ACquisition:POINTS <n>   4.3.15  points per sweep
   VNA:FREQuency:START <Hz>     4.3.3   start frequency
-  VNA:FREQuency:STOP  <Hz>     4.3.5   stop frequency / single-sweep trigger
+  VNA:FREQuency:STOP  <Hz>     4.3.5   stop frequency
   VNA:ACquisition:FINished?    4.3.18  TRUE when averaging complete
   VNA:ACquisition:SINGLE <B>   4.3.20  TRUE=single / FALSE=continuous
   VNA:ACquisition:STOP         4.3.12  halt acquisition
@@ -675,26 +675,17 @@ class BaseVNASweep(ABC):
 
 class SingleModeSweep(BaseVNASweep):
     """
-    Single-sweep mode: trigger via STOP re-send, poll FIN?, read trace.
+    Single-sweep mode: trigger via FREQuency:STOP, poll FIN?, read trace.
 
-    The one-time state reset (ACQ:STOP + ACQ:SINGLE TRUE) that undoes a
-    possible leftover SINGLE FALSE from script 5 is issued by
-    pre_loop_reset(), NOT by configure_sweep().  configure_sweep() sends
-    only the parameter commands so that the GUI sweep pipeline is not
-    re-armed between IFBWs.
+    configure_sweep() sets all sweep parameters EXCEPT FREQuency:STOP.
+    Each sweep in the loop is triggered by sending FREQuency:STOP, which
+    both sets the stop frequency and initiates acquisition.  This mirrors
+    the proven trigger-and-poll protocol used in script 4.
     """
-
-    def pre_loop_reset(self, vna):
-        """One-time state reset: stop any in-progress sweep and restore single mode."""
-        _subsection("Single-mode state reset (one-time)")
-        vna.cmd(":VNA:ACQ:STOP")
-        print("  ACQ:STOP        : sent")
-        vna.cmd(":VNA:ACQ:SINGLE TRUE")
-        print("  ACQ:SINGLE      : TRUE (single-sweep mode restored)")
 
     def configure_sweep(self, vna, ifbw_hz):
         """
-        Single-mode configuration.
+        Single-mode configuration -- everything except STOP.
 
         SCPI sequence
         -------------
@@ -705,12 +696,11 @@ class SingleModeSweep(BaseVNASweep):
         :VNA:ACQ:AVG   <n>
         :VNA:ACQ:POINTS <n>
         :VNA:FREQuency:START <Hz>
-        (STOP is intentionally omitted -- it is the per-sweep trigger)
+        (STOP is the acquisition trigger, sent per-sweep in the loop)
         """
         _subsection("Single-mode configuration  (IFBW = {} kHz)".format(
             ifbw_hz // 1000))
 
-        # -- Sweep configuration (minus STOP) ---------------------------------
         vna.cmd(":DEV:MODE VNA")
         print("  Mode            : VNA")
 
@@ -733,7 +723,8 @@ class SingleModeSweep(BaseVNASweep):
         vna.cmd(":VNA:FREQuency:START {}".format(self.start_freq_hz))
         print("  Start freq      : {} Hz  ({:.3f} GHz)".format(
             self.start_freq_hz, self.start_freq_hz / 1e9))
-        print("  Stop freq       : (sent as sweep trigger)")
+
+        print("  Stop freq       : (will be sent as sweep trigger)")
 
     def run_sweeps(self, vna, ifbw_hz):
         """Dispatch to the timed single-sweep loop."""
@@ -765,7 +756,7 @@ class SingleModeSweep(BaseVNASweep):
 
         for i in range(self.num_sweeps):
 
-            # -- Trigger via STOP -----------------------------------------------
+            # -- Trigger via FREQuency:STOP (sets endpoint + starts sweep) --------
             vna.cmd(":VNA:FREQuency:STOP {}".format(self.stop_freq_hz))
 
             # -- Time: start ----------------------------------------------------
