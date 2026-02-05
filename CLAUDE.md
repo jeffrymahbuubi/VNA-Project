@@ -35,6 +35,45 @@ Scripts build on each other. Each is self-contained but shares helpers via impor
 | `3_sweep_speed_baseline.py` | 30-sweep single-sweep benchmark | Auto-starts GUI, imports `load_calibration` from script 2 |
 | `4_ifbw_parameter_sweep.py` | IFBW impact on speed/jitter | 3 IFBWs × 10 sweeps each |
 | `5_continuous_sweep_speed.py` | 30-sweep continuous benchmark | Enables streaming server, uses `add_live_callback` on port 19001 |
+| `6_librevna_gui_mode_sweep_test.py` | Unified single/continuous benchmark | Config-driven via `sweep_config.yaml`; multi-sheet xlsx export; dispatches mode via `--mode` flag |
+
+### Script 6 — class hierarchy & CLI
+
+```
+BaseVNASweep (ABC)          — GUI lifecycle, cal load, xlsx export
+├── SingleModeSweep         — ACQ:RUN trigger + ACQ:FIN? poll; defensive ACQ:STOP + SINGLE TRUE on entry
+├── ContinuousModeSweep     — streaming callback on port 19001; sweep boundary = pointNum == 0
+└── VNAGUIModeSweepTest     — dispatches to SingleModeSweep or ContinuousModeSweep via --mode
+```
+
+```bash
+uv run python 6_librevna_gui_mode_sweep_test.py                          # single mode, default config
+uv run python 6_librevna_gui_mode_sweep_test.py --mode continuous        # continuous mode
+uv run python 6_librevna_gui_mode_sweep_test.py --config other.yaml      # alternate config
+uv run python 6_librevna_gui_mode_sweep_test.py --no-save                # skip xlsx write
+```
+
+### sweep_config.yaml
+
+All sweep parameters for script 6 live here (`scripts/sweep_config.yaml`). Structure:
+
+```yaml
+configurations:
+  start_frequency: 2430000000      # Hz
+  stop_frequency:  2450000000      # Hz
+  num_points:      300
+  stim_lvl_dbm:   -10
+  avg_count:       1
+  num_sweeps:      30              # sweeps per IFBW value
+
+target:
+  ifbw_values:                     # single int OR list of ints (Hz)
+    - 50000
+    - 10000
+    - 1000
+```
+
+Output is a multi-sheet `.xlsx` workbook in `data/<YYYYMMDD>/` — one sheet per IFBW value.
 
 ## libreVNA.py — SCPI Wrapper Contract
 
@@ -46,7 +85,7 @@ Scripts build on each other. Each is self-contained but shares helpers via impor
 
 ## SCPI Gotchas (read before writing any new script)
 
-1. **Trigger mechanism:** In single-sweep mode, re-sending `VNA:FREQuency:STOP <value>` re-triggers a sweep. Do not use `ACQ:RUN` for single sweeps.
+1. **Trigger mechanism:** In single-sweep mode, use `ACQ:RUN` to trigger each sweep. Do **not** rely on re-sending `FREQuency:STOP` — after a single sweep completes the GUI sets `running=false`, and `SettingsChanged()` (called by every frequency/param write) returns early when `!running`, so no new sweep starts and `TRACE:DATA?` returns stale data. `ACQ:RUN` unconditionally calls `Run()` → `ConfigureDevice()`, which is the only reliable per-sweep trigger. (Confirmed in `vna.cpp:1092-1096` and `vna.cpp:1545-1546`.)
 2. **Script 5 leaves the GUI in continuous mode** (`ACQ:SINGLE FALSE`). Any single-sweep script that runs after script 5 must open with `ACQ:STOP` then `ACQ:SINGLE TRUE`, or `ACQ:FIN?` will return TRUE immediately from background sweeps.
 3. **Streaming servers are disabled by default.** Enable with `:DEV:PREF StreamingServers.VNACalibratedData.enabled true` then `:DEV:APPLYPREFERENCES`. APPLYPREFERENCES crashes/restarts the GUI — reconnect after. The pref persists on disk, so subsequent GUI starts have streaming enabled.
 4. **`DEV:PREF` set commands** return CME in ESR even on success. Always use `check=False`.
