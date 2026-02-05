@@ -5,8 +5,10 @@
 Part 2(b) -- IFBW parameter-sweep test for LibreVNA.
 
 What it does (in order):
+  0. Launches LibreVNA-GUI in headless mode and waits for its SCPI server
+     to come up.
   1. Opens a TCP connection to LibreVNA-GUI and confirms that a hardware
-     device is attached (reuses connect_and_verify from script 2).
+     device is attached.
   2. Loads the SOLT calibration file into the GUI via SCPI (reuses
      load_calibration from script 2).
   3. For each IFBW in [50 kHz, 10 kHz, 1 kHz]:
@@ -28,6 +30,7 @@ What it does (in order):
             Frequency_Hz, Sweep_1_S11_dB, ..., Sweep_10_S11_dB
   4. Prints a final PrettyTable comparing all three IFBW settings.
   5. Saves a summary CSV: ifbw_sweep_summary_<timestamp>.csv
+  6. Shuts down the LibreVNA-GUI process.
 
 SCPI commands used -- all documented in ProgrammingGuide.pdf (Jan 27 2026)
 -------------------------------------------------------------------------
@@ -48,7 +51,6 @@ SCPI commands used -- all documented in ProgrammingGuide.pdf (Jan 27 2026)
 
 Assumptions
 -----------
-* LibreVNA-GUI is running with its SCPI TCP server enabled on port 1234.
 * A calibrated 50-ohm matched load is connected to port 1 so that the
   S11 trace is deep (high return loss) and the noise floor / jitter
   metrics are meaningful.
@@ -64,6 +66,8 @@ import os
 import csv
 import math
 import time
+import socket
+import subprocess
 import importlib
 from datetime import datetime
 
@@ -79,15 +83,22 @@ sys.path.insert(0, SCRIPT_DIR)
 from libreVNA import libreVNA  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Import connect_and_verify / load_calibration from script 2 via importlib.
+# Import load_calibration from script 2 via importlib.
+# connect_and_verify is defined locally (see below) because this script
+# manages the GUI lifecycle itself and needs RuntimeError, not sys.exit.
 # ---------------------------------------------------------------------------
 _mod2 = importlib.import_module("2_s11_cal_verification_sweep")
-connect_and_verify = _mod2.connect_and_verify
-load_calibration   = _mod2.load_calibration
+load_calibration = _mod2.load_calibration
 
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
+
+# -- GUI lifecycle ----------------------------------------------------------
+GUI_BINARY          = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
+SCPI_HOST           = "localhost"
+SCPI_PORT           = 1234
+GUI_START_TIMEOUT_S = 30.0   # max seconds to wait for SCPI server to come up
 
 # -- Sweep parameters (same span / points / power as the baseline) ----------
 START_FREQ_HZ  = 2_430_000_000   # 2.430 GHz
@@ -119,6 +130,119 @@ def _section(title: str) -> None:
 
 def _subsection(title: str) -> None:
     print("\n  --- " + title + " ---")
+
+
+# ===========================================================================
+# GUI LIFECYCLE
+# ===========================================================================
+
+def start_gui():
+    """
+    Launch LibreVNA-GUI in headless mode and poll TCP port SCPI_PORT
+    until the SCPI server accepts a connection.  Returns the Popen handle.
+
+    The GUI is started with QT_QPA_PLATFORM=offscreen so it does not
+    need a display.  The --port flag sets the SCPI TCP server port.
+    """
+    _section("STARTING LibreVNA-GUI")
+
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+
+    proc = subprocess.Popen(
+        [GUI_BINARY, "--port", str(SCPI_PORT)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    print("  GUI PID         : {}".format(proc.pid))
+
+    # Poll until the SCPI TCP server is listening.
+    deadline = time.time() + GUI_START_TIMEOUT_S
+    while True:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            s.connect((SCPI_HOST, SCPI_PORT))
+            s.close()
+            print("  SCPI server     : ready on {}:{}".format(SCPI_HOST, SCPI_PORT))
+            return proc
+        except (ConnectionRefusedError, OSError):
+            s.close()
+        if time.time() > deadline:
+            proc.terminate()
+            proc.wait()
+            raise RuntimeError(
+                "LibreVNA-GUI did not open SCPI server on port {} "
+                "within {:.0f} s".format(SCPI_PORT, GUI_START_TIMEOUT_S)
+            )
+        time.sleep(0.25)
+
+
+def stop_gui(proc):
+    """
+    Terminate the GUI subprocess gracefully (SIGTERM) and wait.
+    If it does not exit within 5 s, escalate to SIGKILL.
+    """
+    _section("STOPPING LibreVNA-GUI")
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+        print("  GUI terminated  : PID {} (clean)".format(proc.pid))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        print("  GUI killed      : PID {} (forced)".format(proc.pid))
+
+
+# ===========================================================================
+# DEVICE CONNECTION  --  local connect_and_verify (raises, does not exit)
+# ===========================================================================
+
+def connect_and_verify():
+    """
+    Open a TCP connection to LibreVNA-GUI and confirm a hardware device
+    is attached.  Raises RuntimeError on any failure (the GUI was just
+    started by this script so a connection problem is unexpected).
+    """
+    _section("DEVICE CONNECTION")
+
+    try:
+        vna = libreVNA(host=SCPI_HOST, port=SCPI_PORT)
+        print("  TCP connection  : OK  ({}:{})".format(SCPI_HOST, SCPI_PORT))
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not connect to LibreVNA-GUI at {}:{}: {}".format(
+                SCPI_HOST, SCPI_PORT, exc)
+        )
+
+    _subsection("*IDN? identification")
+    try:
+        idn_raw = vna.query("*IDN?")
+        print("  Raw response    : {}".format(idn_raw))
+        parts  = [p.strip() for p in idn_raw.split(",")]
+        labels = ["Manufacturer", "Model", "Serial (IDN)", "SW Version"]
+        for label, val in zip(labels, parts):
+            print("    {:<22s}: {}".format(label, val))
+    except Exception as exc:
+        print("  [WARN] *IDN? query failed: {}".format(exc))
+
+    _subsection("DEVice:CONNect? -- device serial")
+    try:
+        dev_serial = vna.query(":DEV:CONN?")
+        print("  Live serial     : {}".format(dev_serial))
+        if dev_serial == "Not connected":
+            raise RuntimeError(
+                "LibreVNA-GUI is not connected to any hardware device."
+            )
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "DEVice:CONNect? query failed: {}".format(exc)
+        )
+
+    return vna
 
 
 # ===========================================================================
@@ -475,73 +599,78 @@ def save_summary_csv(results: list) -> str:
 
 def main() -> None:
     """
-    Entry point.  Orchestrates connect -> calibrate -> IFBW loop ->
-    comparison table -> CSV export.
+    Entry point.  Orchestrates GUI start -> connect -> calibrate ->
+    IFBW loop -> comparison table -> CSV export -> GUI stop.
     """
 
-    # ------------------------------------------------------------------
-    # 1. Connect and verify device presence
-    # ------------------------------------------------------------------
-    vna = connect_and_verify()
+    gui_proc = start_gui()
+    try:
+        # --------------------------------------------------------------
+        # 1. Connect and verify device presence
+        # --------------------------------------------------------------
+        vna = connect_and_verify()
 
-    # ------------------------------------------------------------------
-    # 1b. Load calibration into the GUI
-    # ------------------------------------------------------------------
-    load_calibration(vna)
+        # --------------------------------------------------------------
+        # 1b. Load calibration into the GUI
+        # --------------------------------------------------------------
+        load_calibration(vna)
 
-    # ------------------------------------------------------------------
-    # 2. IFBW loop
-    # ------------------------------------------------------------------
-    # Accumulates one result dict per IFBW value.  Also accumulates
-    # per-IFBW trace data for the multi-sweep CSVs.
-    all_results = []   # list of result dicts (with ifbw_hz added)
+        # --------------------------------------------------------------
+        # 2. IFBW loop
+        # --------------------------------------------------------------
+        # Accumulates one result dict per IFBW value.  Also accumulates
+        # per-IFBW trace data for the multi-sweep CSVs.
+        all_results = []   # list of result dicts (with ifbw_hz added)
 
-    for ifbw_hz in IFBW_VALUES_HZ:
+        for ifbw_hz in IFBW_VALUES_HZ:
 
-        # -- Configure (everything except STOP) ---------------------------
-        configure_sweep(vna, ifbw_hz=ifbw_hz)
+            # -- Configure (everything except STOP) -------------------
+            configure_sweep(vna, ifbw_hz=ifbw_hz)
 
-        # -- Run sweeps ---------------------------------------------------
-        sweep_times, all_s11_db, freq_hz = run_ifbw_test(
-            vna, ifbw_hz, num_sweeps=SWEEPS_PER_IFBW
-        )
+            # -- Run sweeps -------------------------------------------
+            sweep_times, all_s11_db, freq_hz = run_ifbw_test(
+                vna, ifbw_hz, num_sweeps=SWEEPS_PER_IFBW
+            )
 
-        # -- Compute metrics ----------------------------------------------
-        metrics = compute_metrics(sweep_times, all_s11_db)
-        metrics["ifbw_hz"] = ifbw_hz   # tag for table / CSV output
+            # -- Compute metrics --------------------------------------
+            metrics = compute_metrics(sweep_times, all_s11_db)
+            metrics["ifbw_hz"] = ifbw_hz   # tag for table / CSV output
 
-        # -- Per-IFBW progress summary ------------------------------------
-        _subsection("IFBW {} kHz -- metrics".format(ifbw_hz // 1000))
-        print("    Mean sweep time : {:.4f} s".format(
-            metrics["mean_sweep_time"]))
-        print("    Update rate     : {:.2f} Hz".format(
-            metrics["update_rate"]))
-        print("    Noise floor     : {:.2f} dB".format(
-            metrics["noise_floor"]))
-        print("    Trace jitter    : {:.4f} dB".format(
-            metrics["trace_jitter"]))
+            # -- Per-IFBW progress summary ----------------------------
+            _subsection("IFBW {} kHz -- metrics".format(ifbw_hz // 1000))
+            print("    Mean sweep time : {:.4f} s".format(
+                metrics["mean_sweep_time"]))
+            print("    Update rate     : {:.2f} Hz".format(
+                metrics["update_rate"]))
+            print("    Noise floor     : {:.2f} dB".format(
+                metrics["noise_floor"]))
+            print("    Trace jitter    : {:.4f} dB".format(
+                metrics["trace_jitter"]))
 
-        all_results.append(metrics)
+            all_results.append(metrics)
 
-        # -- Save multi-sweep trace CSV for this IFBW ---------------------
-        _subsection("Saving traces for IFBW {} kHz".format(
-            ifbw_hz // 1000))
-        traces_path = save_traces_csv(ifbw_hz, freq_hz, all_s11_db)
-        print("    Traces CSV      : {}".format(traces_path))
+            # -- Save multi-sweep trace CSV for this IFBW -------------
+            _subsection("Saving traces for IFBW {} kHz".format(
+                ifbw_hz // 1000))
+            traces_path = save_traces_csv(ifbw_hz, freq_hz, all_s11_db)
+            print("    Traces CSV      : {}".format(traces_path))
 
-    # ------------------------------------------------------------------
-    # 3. Final comparison table
-    # ------------------------------------------------------------------
-    print_comparison_table(all_results)
+        # --------------------------------------------------------------
+        # 3. Final comparison table
+        # --------------------------------------------------------------
+        print_comparison_table(all_results)
 
-    # ------------------------------------------------------------------
-    # 4. Save summary CSV
-    # ------------------------------------------------------------------
-    _section("SAVING SUMMARY")
-    summary_path = save_summary_csv(all_results)
-    print("  Summary CSV     : {}".format(summary_path))
+        # --------------------------------------------------------------
+        # 4. Save summary CSV
+        # --------------------------------------------------------------
+        _section("SAVING SUMMARY")
+        summary_path = save_summary_csv(all_results)
+        print("  Summary CSV     : {}".format(summary_path))
 
-    print()  # trailing blank line
+        print()  # trailing blank line
+
+    finally:
+        stop_gui(gui_proc)
 
 
 if __name__ == "__main__":

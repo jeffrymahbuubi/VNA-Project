@@ -5,8 +5,10 @@
 Part 2(a) -- Sweep-speed baseline test for LibreVNA.
 
 What it does (in order):
+  0. Launches LibreVNA-GUI in headless mode and waits for its SCPI server
+     to come up.
   1. Opens a TCP connection to LibreVNA-GUI and confirms that a hardware
-     device is attached (reuses connect_and_verify from script 2).
+     device is attached.
   2. Loads the SOLT calibration file into the GUI via SCPI (reuses
      load_calibration from script 2).
   3. Configures a single S11 frequency sweep over 2.43-2.45 GHz at 300
@@ -23,6 +25,7 @@ What it does (in order):
   7. Saves two CSVs to the project data/ directory:
        - sweep_speed_baseline_<YYYYMMDD_HHMMSS>.csv   (timing records)
        - sweep_speed_last_trace_<YYYYMMDD_HHMMSS>.csv  (last S11 trace)
+  8. Shuts down the LibreVNA-GUI process.
 
 SCPI commands used -- all documented in ProgrammingGuide.pdf (Jan 27 2026)
 -------------------------------------------------------------------------
@@ -43,7 +46,6 @@ SCPI commands used -- all documented in ProgrammingGuide.pdf (Jan 27 2026)
 
 Assumptions
 -----------
-* LibreVNA-GUI is running with its SCPI TCP server enabled on port 1234.
 * A 50-ohm matched load is connected to port 1 so that S11 is deep after
   calibration is applied.
 * numpy and prettytable are available in the project venv (both confirmed
@@ -59,6 +61,8 @@ import os
 import csv
 import math
 import time
+import socket
+import subprocess
 import importlib
 from datetime import datetime
 
@@ -79,17 +83,24 @@ sys.path.insert(0, SCRIPT_DIR)
 from libreVNA import libreVNA  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Import connect_and_verify / load_calibration from script 2 via importlib.
+# Import load_calibration from script 2 via importlib.
 # Script 2's filename begins with a digit, which is not a valid Python
 # identifier, so a normal "import" statement cannot be used.
+# connect_and_verify is defined locally (see below) because this script
+# manages the GUI lifecycle itself and needs RuntimeError, not sys.exit.
 # ---------------------------------------------------------------------------
 _mod2 = importlib.import_module("2_s11_cal_verification_sweep")
-connect_and_verify = _mod2.connect_and_verify
-load_calibration   = _mod2.load_calibration
+load_calibration = _mod2.load_calibration
 
 # ---------------------------------------------------------------------------
 # Module-level configuration constants
 # ---------------------------------------------------------------------------
+
+# -- GUI lifecycle ----------------------------------------------------------
+GUI_BINARY          = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
+SCPI_HOST           = "localhost"
+SCPI_PORT           = 1234
+GUI_START_TIMEOUT_S = 30.0   # max seconds to wait for SCPI server to come up
 
 # -- Sweep parameters (identical to the Part 2 baseline in script 2) --------
 START_FREQ_HZ  = 2_430_000_000   # 2.430 GHz
@@ -117,6 +128,119 @@ def _section(title: str) -> None:
 
 def _subsection(title: str) -> None:
     print("\n  --- " + title + " ---")
+
+
+# ===========================================================================
+# GUI LIFECYCLE
+# ===========================================================================
+
+def start_gui():
+    """
+    Launch LibreVNA-GUI in headless mode and poll TCP port SCPI_PORT
+    until the SCPI server accepts a connection.  Returns the Popen handle.
+
+    The GUI is started with QT_QPA_PLATFORM=offscreen so it does not
+    need a display.  The --port flag sets the SCPI TCP server port.
+    """
+    _section("STARTING LibreVNA-GUI")
+
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+
+    proc = subprocess.Popen(
+        [GUI_BINARY, "--port", str(SCPI_PORT)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    print("  GUI PID         : {}".format(proc.pid))
+
+    # Poll until the SCPI TCP server is listening.
+    deadline = time.time() + GUI_START_TIMEOUT_S
+    while True:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            s.connect((SCPI_HOST, SCPI_PORT))
+            s.close()
+            print("  SCPI server     : ready on {}:{}".format(SCPI_HOST, SCPI_PORT))
+            return proc
+        except (ConnectionRefusedError, OSError):
+            s.close()
+        if time.time() > deadline:
+            proc.terminate()
+            proc.wait()
+            raise RuntimeError(
+                "LibreVNA-GUI did not open SCPI server on port {} "
+                "within {:.0f} s".format(SCPI_PORT, GUI_START_TIMEOUT_S)
+            )
+        time.sleep(0.25)
+
+
+def stop_gui(proc):
+    """
+    Terminate the GUI subprocess gracefully (SIGTERM) and wait.
+    If it does not exit within 5 s, escalate to SIGKILL.
+    """
+    _section("STOPPING LibreVNA-GUI")
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+        print("  GUI terminated  : PID {} (clean)".format(proc.pid))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        print("  GUI killed      : PID {} (forced)".format(proc.pid))
+
+
+# ===========================================================================
+# DEVICE CONNECTION  --  local connect_and_verify (raises, does not exit)
+# ===========================================================================
+
+def connect_and_verify():
+    """
+    Open a TCP connection to LibreVNA-GUI and confirm a hardware device
+    is attached.  Raises RuntimeError on any failure (the GUI was just
+    started by this script so a connection problem is unexpected).
+    """
+    _section("DEVICE CONNECTION")
+
+    try:
+        vna = libreVNA(host=SCPI_HOST, port=SCPI_PORT)
+        print("  TCP connection  : OK  ({}:{})".format(SCPI_HOST, SCPI_PORT))
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not connect to LibreVNA-GUI at {}:{}: {}".format(
+                SCPI_HOST, SCPI_PORT, exc)
+        )
+
+    _subsection("*IDN? identification")
+    try:
+        idn_raw = vna.query("*IDN?")
+        print("  Raw response    : {}".format(idn_raw))
+        parts  = [p.strip() for p in idn_raw.split(",")]
+        labels = ["Manufacturer", "Model", "Serial (IDN)", "SW Version"]
+        for label, val in zip(labels, parts):
+            print("    {:<22s}: {}".format(label, val))
+    except Exception as exc:
+        print("  [WARN] *IDN? query failed: {}".format(exc))
+
+    _subsection("DEVice:CONNect? -- device serial")
+    try:
+        dev_serial = vna.query(":DEV:CONN?")
+        print("  Live serial     : {}".format(dev_serial))
+        if dev_serial == "Not connected":
+            raise RuntimeError(
+                "LibreVNA-GUI is not connected to any hardware device."
+            )
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "DEVice:CONNect? query failed: {}".format(exc)
+        )
+
+    return vna
 
 
 # ===========================================================================
@@ -409,53 +533,58 @@ def save_trace_csv(freq_hz: list, s11_db: list, prefix: str) -> str:
 
 def main() -> None:
     """
-    Entry point.  Orchestrates connect -> calibrate -> configure ->
-    timed loop -> statistics -> CSV export.
+    Entry point.  Orchestrates GUI start -> connect -> calibrate ->
+    configure -> timed loop -> statistics -> CSV export -> GUI stop.
     """
 
-    # ------------------------------------------------------------------
-    # 1. Connect and verify device presence
-    # ------------------------------------------------------------------
-    vna = connect_and_verify()
+    gui_proc = start_gui()
+    try:
+        # --------------------------------------------------------------
+        # 1. Connect and verify device presence
+        # --------------------------------------------------------------
+        vna = connect_and_verify()
 
-    # ------------------------------------------------------------------
-    # 1b. Load calibration into the GUI
-    # ------------------------------------------------------------------
-    load_calibration(vna)
+        # --------------------------------------------------------------
+        # 1b. Load calibration into the GUI
+        # --------------------------------------------------------------
+        load_calibration(vna)
 
-    # ------------------------------------------------------------------
-    # 2. Configure sweep (everything except STOP)
-    # ------------------------------------------------------------------
-    configure_sweep(vna, ifbw_hz=IFBW_HZ)
+        # --------------------------------------------------------------
+        # 2. Configure sweep (everything except STOP)
+        # --------------------------------------------------------------
+        configure_sweep(vna, ifbw_hz=IFBW_HZ)
 
-    # ------------------------------------------------------------------
-    # 3. Run the timed sweep loop
-    # ------------------------------------------------------------------
-    sweep_times, last_freq_hz, last_s11_db = run_timed_sweeps(
-        vna, NUM_SWEEPS
-    )
+        # --------------------------------------------------------------
+        # 3. Run the timed sweep loop
+        # --------------------------------------------------------------
+        sweep_times, last_freq_hz, last_s11_db = run_timed_sweeps(
+            vna, NUM_SWEEPS
+        )
 
-    # ------------------------------------------------------------------
-    # 4. Print statistics
-    # ------------------------------------------------------------------
-    print_timing_summary(sweep_times)
+        # --------------------------------------------------------------
+        # 4. Print statistics
+        # --------------------------------------------------------------
+        print_timing_summary(sweep_times)
 
-    # ------------------------------------------------------------------
-    # 5. Save timing CSV
-    # ------------------------------------------------------------------
-    _section("SAVING RESULTS")
-    timing_csv_path = save_timing_csv(sweep_times)
-    print("  Timing CSV      : {}".format(timing_csv_path))
+        # --------------------------------------------------------------
+        # 5. Save timing CSV
+        # --------------------------------------------------------------
+        _section("SAVING RESULTS")
+        timing_csv_path = save_timing_csv(sweep_times)
+        print("  Timing CSV      : {}".format(timing_csv_path))
 
-    # ------------------------------------------------------------------
-    # 6. Save last-sweep trace CSV
-    # ------------------------------------------------------------------
-    trace_csv_path = save_trace_csv(
-        last_freq_hz, last_s11_db, "sweep_speed_last_trace"
-    )
-    print("  Last trace CSV  : {}".format(trace_csv_path))
+        # --------------------------------------------------------------
+        # 6. Save last-sweep trace CSV
+        # --------------------------------------------------------------
+        trace_csv_path = save_trace_csv(
+            last_freq_hz, last_s11_db, "sweep_speed_last_trace"
+        )
+        print("  Last trace CSV  : {}".format(trace_csv_path))
 
-    print()  # trailing blank line
+        print()  # trailing blank line
+
+    finally:
+        stop_gui(gui_proc)
 
 
 if __name__ == "__main__":
