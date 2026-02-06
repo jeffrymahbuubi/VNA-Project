@@ -7,3 +7,11 @@ data
 __pycache__/
 .ipynb_checkpoints
 .jupyter_ystore.db
+
+# Copilot CLI - exclude personal files but keep mcp-config.json
+.copilot/logs/
+.copilot/config.json
+.copilot/command-history-state.json
+.copilot/session-state/
+.copilot/pkg/
+.copilot/mcp-config.json
