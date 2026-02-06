@@ -36,6 +36,18 @@ SCPI commands used -- all documented in ProgrammingGuide.pdf
   VNA:CALibration:LOAD? <file> 4.3.55  load cal file (query)
   VNA:CALibration:ACTIVE?      4.3.45  active cal type (query)
 
+Prerequisites
+-------------
+CONTINUOUS MODE:
+  * The VNA Calibrated Data streaming server (port 19001) is automatically
+    enabled by the script if not already running.  The first continuous-mode
+    run will restart the GUI to enable streaming; subsequent runs will use
+    the fast path (no restart needed).
+
+BOTH MODES:
+  * A calibrated 50-ohm matched load is connected to port 1.
+  * The data/ directory is a sibling of scripts/ under LibreVNA-dev/.
+
 Usage
 -----
     uv run python 6_librevna_gui_mode_sweep_test.py                  # single, default config
@@ -86,27 +98,28 @@ load_calibration = _mod2.load_calibration
 # Module-level constants (GUI lifecycle, SCPI connection)
 # ---------------------------------------------------------------------------
 
-GUI_BINARY          = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
-CAL_FILE_PATH       = os.path.normpath(
+GUI_BINARY = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
+CAL_FILE_PATH = os.path.normpath(
     os.path.join(SCRIPT_DIR, "..", "calibration", "SOLT_1_2_43G-2_45G_300pt.cal")
 )
-DATA_DIR            = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "data"))
+DATA_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "data"))
 
-SCPI_HOST           = "localhost"
-SCPI_PORT           = 1234
+SCPI_HOST = "localhost"
+SCPI_PORT = 1234
 GUI_START_TIMEOUT_S = 30.0
 
 # Polling / timeout constants for the single-sweep poll loop
-POLL_INTERVAL_S     = 0.01
-SWEEP_TIMEOUT_S     = 60.0
+POLL_INTERVAL_S = 0.01
+SWEEP_TIMEOUT_S = 60.0
 
 # Streaming port for continuous mode (VNA Calibrated Data)
-STREAMING_PORT      = 19001
-CONTINUOUS_TIMEOUT_S = 300   # hard ceiling on event.wait()
+STREAMING_PORT = 19001
+CONTINUOUS_TIMEOUT_S = 300  # hard ceiling on event.wait()
 
 # ---------------------------------------------------------------------------
 # Console-output helpers (identical style to scripts 1-5)
 # ---------------------------------------------------------------------------
+
 
 def _section(title):
     """Print a dashed section header."""
@@ -125,21 +138,24 @@ def _subsection(title):
 # SweepResult dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SweepResult:
     """Container for one complete IFBW run (all sweeps at that setting)."""
-    mode          : str                          # "single" or "continuous"
-    ifbw_hz       : int
-    sweep_times   : list                         # list[float] wall-clock seconds per sweep
-    all_s11_db    : list                         # list[list[float]] [sweep_idx][point_idx]
-    freq_hz       : list                         # list[float] frequency axis
-    noise_floor   : float = 0.0                  # filled by compute_metrics
-    trace_jitter  : float = 0.0                  # filled by compute_metrics
+
+    mode: str  # "single" or "continuous"
+    ifbw_hz: int
+    sweep_times: list  # list[float] wall-clock seconds per sweep
+    all_s11_db: list  # list[list[float]] [sweep_idx][point_idx]
+    freq_hz: list  # list[float] frequency axis
+    noise_floor: float = 0.0  # filled by compute_metrics
+    trace_jitter: float = 0.0  # filled by compute_metrics
 
 
 # ===========================================================================
 # BaseVNASweep  --  abstract base class
 # ===========================================================================
+
 
 class BaseVNASweep(ABC):
     """
@@ -157,23 +173,23 @@ class BaseVNASweep(ABC):
         summary     : bool  -- if True, print the PrettyTable at the end.
         save_data   : bool  -- if True, write the xlsx workbook.
         """
-        self.mode        = mode
-        self.summary     = summary
-        self.save_data   = save_data
+        self.mode = mode
+        self.summary = summary
+        self.save_data = save_data
 
         # -- Load YAML config --------------------------------------------------
         with open(config_path, "r") as fh:
             raw = yaml.safe_load(fh)
 
-        cfg  = raw["configurations"]
-        tgt  = raw["target"]
+        cfg = raw["configurations"]
+        tgt = raw["target"]
 
-        self.start_freq_hz  = int(cfg["start_frequency"])
-        self.stop_freq_hz   = int(cfg["stop_frequency"])
-        self.num_points     = int(cfg["num_points"])
-        self.stim_lvl_dbm   = int(cfg["stim_lvl_dbm"])
-        self.avg_count      = int(cfg["avg_count"])
-        self.num_sweeps     = int(cfg["num_sweeps"])
+        self.start_freq_hz = int(cfg["start_frequency"])
+        self.stop_freq_hz = int(cfg["stop_frequency"])
+        self.num_points = int(cfg["num_points"])
+        self.stim_lvl_dbm = int(cfg["stim_lvl_dbm"])
+        self.avg_count = int(cfg["avg_count"])
+        self.num_sweeps = int(cfg["num_sweeps"])
 
         # Normalise ifbw_values: accept a single int OR a list of ints.
         raw_ifbw = tgt["ifbw_values"]
@@ -262,14 +278,15 @@ class BaseVNASweep(ABC):
         except Exception as exc:
             raise RuntimeError(
                 "Could not connect to LibreVNA-GUI at {}:{}: {}".format(
-                    SCPI_HOST, SCPI_PORT, exc)
+                    SCPI_HOST, SCPI_PORT, exc
+                )
             )
 
         _subsection("*IDN? identification")
         try:
             idn_raw = vna.query("*IDN?")
             print("  Raw response    : {}".format(idn_raw))
-            parts  = [p.strip() for p in idn_raw.split(",")]
+            parts = [p.strip() for p in idn_raw.split(",")]
             labels = ["Manufacturer", "Model", "Serial (IDN)", "SW Version"]
             for label, val in zip(labels, parts):
                 print("    {:<22s}: {}".format(label, val))
@@ -287,9 +304,7 @@ class BaseVNASweep(ABC):
         except RuntimeError:
             raise
         except Exception as exc:
-            raise RuntimeError(
-                "DEVice:CONNect? query failed: {}".format(exc)
-            )
+            raise RuntimeError("DEVice:CONNect? query failed: {}".format(exc))
 
         return vna
 
@@ -307,6 +322,63 @@ class BaseVNASweep(ABC):
             Connected wrapper instance.
         """
         load_calibration(vna)
+
+
+    def enable_streaming_server(self, vna):
+        """
+        Ensure the VNA Calibrated Data streaming server is enabled on port 19001.
+
+        If the streaming server is already enabled (port 19001 is listening),
+        this method returns False immediately (fast path).
+
+        If the streaming server is disabled, this method enables it via SCPI:
+            :DEV:PREF StreamingServers.VNACalibratedData.enabled true
+            :DEV:APPLYPREFERENCES
+
+        Note that APPLYPREFERENCES saves the preference to disk and terminates
+        the GUI.  The caller (run()) must stop the old GUI and start a new one.
+
+        Parameters
+        ----------
+        vna : libreVNA
+            The currently active connection (will become stale after this call).
+
+        Returns
+        -------
+        bool
+            True if the preference was set (caller must restart GUI).
+            False if streaming was already enabled (no restart needed).
+        """
+        _section("STREAMING SERVER SETUP")
+
+        # Test if streaming server is already listening
+        print("  Testing port {} ...".format(STREAMING_PORT))
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.0)
+            s.connect((SCPI_HOST, STREAMING_PORT))
+            s.close()
+            print("  Status          : already enabled (fast path)")
+            return False  # no restart needed
+        except (ConnectionRefusedError, OSError):
+            s.close()
+            print("  Status          : not enabled, enabling now...")
+
+        # Enable streaming server via SCPI
+        # DEV:PREF set returns CME bit even on success -- use check=False
+        print("  Sending         : DEV:PREF StreamingServers.VNACalibratedData.enabled true")
+        vna.cmd(":DEV:PREF StreamingServers.VNACalibratedData.enabled true", check=False)
+
+        print("  Sending         : DEV:APPLYPREFERENCES")
+        vna.cmd(":DEV:APPLYPREFERENCES", check=False)
+
+        # APPLYPREFERENCES saves the preference to disk and terminates the GUI.
+        # Give it a moment to save, then let the caller handle the restart.
+        print("  Preference      : saved to disk")
+        print("  [INFO] GUI will terminate now; caller must restart it")
+        time.sleep(2)  # brief pause to ensure preference is saved
+
+        return True  # caller must restart GUI
 
     # -----------------------------------------------------------------------
     # Abstract methods -- implemented by the single / continuous subclasses
@@ -349,10 +421,10 @@ class BaseVNASweep(ABC):
         result : SweepResult
             Must have all_s11_db populated.
         """
-        s11_arr = np.array(result.all_s11_db)           # shape (num_sweeps, num_points)
+        s11_arr = np.array(result.all_s11_db)  # shape (num_sweeps, num_points)
 
         # Noise floor
-        per_sweep_means = np.mean(s11_arr, axis=1)      # shape (num_sweeps,)
+        per_sweep_means = np.mean(s11_arr, axis=1)  # shape (num_sweeps,)
         result.noise_floor = float(np.mean(per_sweep_means))
 
         # Trace jitter
@@ -391,23 +463,25 @@ class BaseVNASweep(ABC):
 
         for r in all_results:
             times_arr = np.array(r.sweep_times)
-            mean_t    = float(np.mean(times_arr))
-            std_t     = float(np.std(times_arr, ddof=1)) if len(times_arr) > 1 else 0.0
-            min_t     = float(np.min(times_arr))
-            max_t     = float(np.max(times_arr))
-            rate      = 1.0 / mean_t if mean_t > 0 else float('inf')
+            mean_t = float(np.mean(times_arr))
+            std_t = float(np.std(times_arr, ddof=1)) if len(times_arr) > 1 else 0.0
+            min_t = float(np.min(times_arr))
+            max_t = float(np.max(times_arr))
+            rate = 1.0 / mean_t if mean_t > 0 else float("inf")
 
-            table.add_row([
-                r.mode,
-                "{:d}".format(r.ifbw_hz // 1000),
-                "{:.4f}".format(mean_t),
-                "{:.4f}".format(std_t),
-                "{:.4f}".format(min_t),
-                "{:.4f}".format(max_t),
-                "{:.2f}".format(rate),
-                "{:.2f}".format(r.noise_floor),
-                "{:.4f}".format(r.trace_jitter),
-            ])
+            table.add_row(
+                [
+                    r.mode,
+                    "{:d}".format(r.ifbw_hz // 1000),
+                    "{:.4f}".format(mean_t),
+                    "{:.4f}".format(std_t),
+                    "{:.4f}".format(min_t),
+                    "{:.4f}".format(max_t),
+                    "{:.2f}".format(rate),
+                    "{:.2f}".format(r.noise_floor),
+                    "{:.4f}".format(r.trace_jitter),
+                ]
+            )
 
         print(table)
 
@@ -435,19 +509,21 @@ class BaseVNASweep(ABC):
             Absolute path of the written xlsx file.
         """
         # -- Output path: ../data/YYYYMMDD/ -----------------------------------
-        today    = datetime.now().strftime("%Y%m%d")
-        out_dir  = os.path.join(DATA_DIR, today)
+        today = datetime.now().strftime("%Y%m%d")
+        out_dir = os.path.join(DATA_DIR, today)
         os.makedirs(out_dir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename  = "{}_sweep_test_{}.xlsx".format(self.mode, timestamp)
+        filename = "{}_sweep_test_{}.xlsx".format(self.mode, timestamp)
         full_path = os.path.join(out_dir, filename)
 
         # -- Style definitions ------------------------------------------------
-        bold_font      = Font(bold=True)
-        title_font     = Font(bold=True, size=13)
-        section_font   = Font(bold=True, size=12)
-        header_fill    = PatternFill(start_color="D6EAF8", end_color="D6EAF8", fill_type="solid")
+        bold_font = Font(bold=True)
+        title_font = Font(bold=True, size=13)
+        section_font = Font(bold=True, size=12)
+        header_fill = PatternFill(
+            start_color="D6EAF8", end_color="D6EAF8", fill_type="solid"
+        )
 
         wb = Workbook()
 
@@ -456,8 +532,9 @@ class BaseVNASweep(ABC):
         ws.title = "Summary"
 
         # Row 1: merged title
-        ws.cell(row=1, column=1,
-                value="VNA Sweep Test Summary -- {} mode".format(self.mode))
+        ws.cell(
+            row=1, column=1, value="VNA Sweep Test Summary -- {} mode".format(self.mode)
+        )
         ws.cell(row=1, column=1).font = title_font
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=10)
 
@@ -465,24 +542,31 @@ class BaseVNASweep(ABC):
 
         # Row 3: headers
         summary_headers = [
-            "Mode", "IFBW (kHz)", "Mean Time (s)", "Mean Time (ms)",
-            "Std Dev (s)", "Min Time (s)", "Max Time (s)", "Rate (Hz)",
-            "Noise Floor (dB)", "Trace Jitter (dB)",
+            "Mode",
+            "IFBW (kHz)",
+            "Mean Time (s)",
+            "Mean Time (ms)",
+            "Std Dev (s)",
+            "Min Time (s)",
+            "Max Time (s)",
+            "Rate (Hz)",
+            "Noise Floor (dB)",
+            "Trace Jitter (dB)",
         ]
         for col_idx, hdr in enumerate(summary_headers, start=1):
             cell = ws.cell(row=3, column=col_idx, value=hdr)
-            cell.font  = bold_font
-            cell.fill  = header_fill
+            cell.font = bold_font
+            cell.fill = header_fill
 
         # Row 4+: data
         for row_offset, r in enumerate(all_results):
             row = 4 + row_offset
             times_arr = np.array(r.sweep_times)
-            mean_t    = float(np.mean(times_arr))
-            std_t     = float(np.std(times_arr, ddof=1)) if len(times_arr) > 1 else 0.0
-            min_t     = float(np.min(times_arr))
-            max_t     = float(np.max(times_arr))
-            rate      = 1.0 / mean_t if mean_t > 0 else float('inf')
+            mean_t = float(np.mean(times_arr))
+            std_t = float(np.std(times_arr, ddof=1)) if len(times_arr) > 1 else 0.0
+            min_t = float(np.min(times_arr))
+            max_t = float(np.max(times_arr))
+            rate = 1.0 / mean_t if mean_t > 0 else float("inf")
 
             values = [
                 r.mode,
@@ -501,7 +585,7 @@ class BaseVNASweep(ABC):
 
         # ---- Per-IFBW sheets ------------------------------------------------
         for r in all_results:
-            ifbw_khz  = r.ifbw_hz // 1000
+            ifbw_khz = r.ifbw_hz // 1000
             sheet_name = "IFBW_{}kHz".format(ifbw_khz)
             ws = wb.create_sheet(title=sheet_name)
 
@@ -510,17 +594,17 @@ class BaseVNASweep(ABC):
             ws.cell(row=1, column=1).font = section_font
 
             config_rows = [
-                ("Mode",                self.mode),
-                ("IFBW (kHz)",          ifbw_khz),
-                ("Start Freq (Hz)",     self.start_freq_hz),
-                ("Stop Freq (Hz)",      self.stop_freq_hz),
-                ("Points",              self.num_points),
-                ("STIM Level (dBm)",    self.stim_lvl_dbm),
-                ("Avg Count",           self.avg_count),
-                ("Num Sweeps",          self.num_sweeps),
+                ("Mode", self.mode),
+                ("IFBW (kHz)", ifbw_khz),
+                ("Start Freq (Hz)", self.start_freq_hz),
+                ("Stop Freq (Hz)", self.stop_freq_hz),
+                ("Points", self.num_points),
+                ("STIM Level (dBm)", self.stim_lvl_dbm),
+                ("Avg Count", self.avg_count),
+                ("Num Sweeps", self.num_sweeps),
             ]
             for i, (label, value) in enumerate(config_rows):
-                row = 2 + i   # rows 2-9
+                row = 2 + i  # rows 2-9
                 ws.cell(row=row, column=1, value=label).font = bold_font
                 ws.cell(row=row, column=2, value=value)
             # Row 9 is the last config row (2 + 7); row 10 is blank (gap already)
@@ -530,16 +614,21 @@ class BaseVNASweep(ABC):
             ws.cell(row=timing_header_row, column=1, value="Timing")
             ws.cell(row=timing_header_row, column=1).font = section_font
 
-            timing_cols = ["Sweep #", "Sweep Time (s)", "Sweep Time (ms)", "Update Rate (Hz)"]
-            col_header_row = timing_header_row + 1   # row 11
+            timing_cols = [
+                "Sweep #",
+                "Sweep Time (s)",
+                "Sweep Time (ms)",
+                "Update Rate (Hz)",
+            ]
+            col_header_row = timing_header_row + 1  # row 11
             for col_idx, hdr in enumerate(timing_cols, start=1):
                 cell = ws.cell(row=col_header_row, column=col_idx, value=hdr)
                 cell.font = bold_font
                 cell.fill = header_fill
 
             for sweep_idx, t in enumerate(r.sweep_times):
-                row = col_header_row + 1 + sweep_idx   # row 12+
-                rate = 1.0 / t if t > 0 else float('inf')
+                row = col_header_row + 1 + sweep_idx  # row 12+
+                rate = 1.0 / t if t > 0 else float("inf")
                 ws.cell(row=row, column=1, value=sweep_idx + 1)
                 ws.cell(row=row, column=2, value=round(t, 4))
                 ws.cell(row=row, column=3, value=round(t * 1000, 4))
@@ -559,8 +648,11 @@ class BaseVNASweep(ABC):
             ws.cell(row=trace_col_header_row, column=1).fill = header_fill
             for s_idx in range(len(r.all_s11_db)):
                 col = 2 + s_idx
-                ws.cell(row=trace_col_header_row, column=col,
-                        value="Sweep_{} S11 (dB)".format(s_idx + 1))
+                ws.cell(
+                    row=trace_col_header_row,
+                    column=col,
+                    value="Sweep_{} S11 (dB)".format(s_idx + 1),
+                )
                 ws.cell(row=trace_col_header_row, column=col).font = bold_font
                 ws.cell(row=trace_col_header_row, column=col).fill = header_fill
 
@@ -569,8 +661,11 @@ class BaseVNASweep(ABC):
                 row = trace_col_header_row + 1 + pt_idx
                 ws.cell(row=row, column=1, value=freq)
                 for s_idx in range(len(r.all_s11_db)):
-                    ws.cell(row=row, column=2 + s_idx,
-                            value=round(r.all_s11_db[s_idx][pt_idx], 4))
+                    ws.cell(
+                        row=row,
+                        column=2 + s_idx,
+                        value=round(r.all_s11_db[s_idx][pt_idx], 4),
+                    )
 
             # blank row after traces
             metrics_section_row = trace_col_header_row + 1 + len(r.freq_hz) + 1
@@ -581,11 +676,15 @@ class BaseVNASweep(ABC):
 
             ws.cell(row=metrics_section_row + 1, column=1, value="Noise Floor (dB)")
             ws.cell(row=metrics_section_row + 1, column=1).font = bold_font
-            ws.cell(row=metrics_section_row + 1, column=2, value=round(r.noise_floor, 4))
+            ws.cell(
+                row=metrics_section_row + 1, column=2, value=round(r.noise_floor, 4)
+            )
 
             ws.cell(row=metrics_section_row + 2, column=1, value="Trace Jitter (dB)")
             ws.cell(row=metrics_section_row + 2, column=1).font = bold_font
-            ws.cell(row=metrics_section_row + 2, column=2, value=round(r.trace_jitter, 6))
+            ws.cell(
+                row=metrics_section_row + 2, column=2, value=round(r.trace_jitter, 6)
+            )
 
         # -- Write workbook ---------------------------------------------------
         wb.save(full_path)
@@ -615,17 +714,29 @@ class BaseVNASweep(ABC):
         --------
         1.  start_gui()
         2.  connect_and_verify()
-        3.  load_calibration()
-        4.  pre_loop_reset()   (one-time mode-specific setup)
-        5.  For each IFBW: configure_sweep() -> run_sweeps() -> compute_metrics()
-        6.  post_loop_teardown()   (one-time mode-specific cleanup)
-        7.  print_summary()  (if self.summary)
-        8.  save_xlsx()      (if self.save_data)
-        9.  stop_gui()       (in finally block)
+        3.  enable_streaming_server() (continuous mode only; auto-enables + may restart GUI)
+        4.  load_calibration()
+        5.  pre_loop_reset()   (one-time mode-specific setup)
+        6.  For each IFBW: configure_sweep() -> run_sweeps() -> compute_metrics()
+        7.  post_loop_teardown()   (one-time mode-specific cleanup)
+        8.  print_summary()  (if self.summary)
+        9.  save_xlsx()      (if self.save_data)
+        10. stop_gui()       (in finally block)
         """
         gui_proc = self.start_gui()
         try:
             vna = self.connect_and_verify()
+
+            # If continuous mode, enable streaming server (may restart GUI)
+            if self.mode == "continuous":
+                needs_restart = self.enable_streaming_server(vna)
+                if needs_restart:
+                    # APPLYPREFERENCES terminated the old GUI; restart it
+                    _section("RESTARTING GUI")
+                    self.stop_gui(gui_proc)
+                    gui_proc = self.start_gui()
+                    vna = self.connect_and_verify()
+
             self.load_calibration(vna)
 
             all_results = []
@@ -633,8 +744,9 @@ class BaseVNASweep(ABC):
             self.pre_loop_reset(vna)
 
             for ifbw_hz in self.ifbw_values:
-                _section("IFBW = {} kHz  --  {} mode".format(
-                    ifbw_hz // 1000, self.mode))
+                _section(
+                    "IFBW = {} kHz  --  {} mode".format(ifbw_hz // 1000, self.mode)
+                )
 
                 self.configure_sweep(vna, ifbw_hz)
                 result = self.run_sweeps(vna, ifbw_hz)
@@ -643,9 +755,16 @@ class BaseVNASweep(ABC):
                 # Per-IFBW progress
                 _subsection("IFBW {} kHz -- metrics".format(ifbw_hz // 1000))
                 times_arr = np.array(result.sweep_times)
-                print("    Mean sweep time : {:.4f} s".format(float(np.mean(times_arr))))
-                print("    Update rate     : {:.2f} Hz".format(
-                    1.0 / float(np.mean(times_arr)) if float(np.mean(times_arr)) > 0 else float('inf')))
+                print(
+                    "    Mean sweep time : {:.4f} s".format(float(np.mean(times_arr)))
+                )
+                print(
+                    "    Update rate     : {:.2f} Hz".format(
+                        1.0 / float(np.mean(times_arr))
+                        if float(np.mean(times_arr)) > 0
+                        else float("inf")
+                    )
+                )
                 print("    Noise floor     : {:.2f} dB".format(result.noise_floor))
                 print("    Trace jitter    : {:.4f} dB".format(result.trace_jitter))
 
@@ -673,6 +792,7 @@ class BaseVNASweep(ABC):
 # SingleModeSweep
 # ===========================================================================
 
+
 class SingleModeSweep(BaseVNASweep):
     """
     Single-sweep mode: trigger via FREQuency:STOP, poll FIN?, read trace.
@@ -698,8 +818,9 @@ class SingleModeSweep(BaseVNASweep):
         :VNA:FREQuency:START <Hz>
         (STOP is the acquisition trigger, sent per-sweep in the loop)
         """
-        _subsection("Single-mode configuration  (IFBW = {} kHz)".format(
-            ifbw_hz // 1000))
+        _subsection(
+            "Single-mode configuration  (IFBW = {} kHz)".format(ifbw_hz // 1000)
+        )
 
         vna.cmd(":DEV:MODE VNA")
         print("  Mode            : VNA")
@@ -711,8 +832,7 @@ class SingleModeSweep(BaseVNASweep):
         print("  Stimulus level  : {} dBm".format(self.stim_lvl_dbm))
 
         vna.cmd(":VNA:ACQ:IFBW {}".format(ifbw_hz))
-        print("  IF bandwidth    : {} Hz  ({} kHz)".format(
-            ifbw_hz, ifbw_hz // 1000))
+        print("  IF bandwidth    : {} Hz  ({} kHz)".format(ifbw_hz, ifbw_hz // 1000))
 
         vna.cmd(":VNA:ACQ:AVG {}".format(self.avg_count))
         print("  Averaging       : {} sweep(s)".format(self.avg_count))
@@ -721,8 +841,11 @@ class SingleModeSweep(BaseVNASweep):
         print("  Points          : {}".format(self.num_points))
 
         vna.cmd(":VNA:FREQuency:START {}".format(self.start_freq_hz))
-        print("  Start freq      : {} Hz  ({:.3f} GHz)".format(
-            self.start_freq_hz, self.start_freq_hz / 1e9))
+        print(
+            "  Start freq      : {} Hz  ({:.3f} GHz)".format(
+                self.start_freq_hz, self.start_freq_hz / 1e9
+            )
+        )
 
         print("  Stop freq       : (will be sent as sweep trigger)")
 
@@ -750,8 +873,8 @@ class SingleModeSweep(BaseVNASweep):
         """
         _subsection("Single-sweep loop  ({} sweeps)".format(self.num_sweeps))
 
-        sweep_times  = []
-        all_s11_db   = []
+        sweep_times = []
+        all_s11_db = []
         freq_hz_axis = []
 
         for i in range(self.num_sweeps):
@@ -771,22 +894,26 @@ class SingleModeSweep(BaseVNASweep):
                     raise TimeoutError(
                         "IFBW={} kHz, sweep {}/{}: VNA:ACQ:FIN? did not return "
                         "TRUE within {:.0f} s (last response: '{}')".format(
-                            ifbw_hz // 1000, i + 1, self.num_sweeps,
-                            SWEEP_TIMEOUT_S, finished)
+                            ifbw_hz // 1000,
+                            i + 1,
+                            self.num_sweeps,
+                            SWEEP_TIMEOUT_S,
+                            finished,
+                        )
                     )
                 time.sleep(POLL_INTERVAL_S)
 
             # -- Time: end ------------------------------------------------------
-            t_end      = time.time()
+            t_end = time.time()
             sweep_time = t_end - t_start
             sweep_times.append(sweep_time)
 
             # -- Read trace (outside timed window) ------------------------------
             raw_data = vna.query(":VNA:TRACE:DATA? S11")
-            trace    = libreVNA.parse_VNA_trace_data(raw_data)
+            trace = libreVNA.parse_VNA_trace_data(raw_data)
 
             # -- Convert to dB --------------------------------------------------
-            sweep_freq  = []
+            sweep_freq = []
             sweep_s11db = []
             for fq, gamma in trace:
                 magnitude = abs(gamma)
@@ -802,22 +929,26 @@ class SingleModeSweep(BaseVNASweep):
             all_s11_db.append(sweep_s11db)
 
             # -- Progress line --------------------------------------------------
-            update_rate = 1.0 / sweep_time if sweep_time > 0 else float('inf')
-            print("    Sweep {:>2d}/{:<2d}  :  {:.4f} s  ({:.1f} Hz)".format(
-                i + 1, self.num_sweeps, sweep_time, update_rate))
+            update_rate = 1.0 / sweep_time if sweep_time > 0 else float("inf")
+            print(
+                "    Sweep {:>2d}/{:<2d}  :  {:.4f} s  ({:.1f} Hz)".format(
+                    i + 1, self.num_sweeps, sweep_time, update_rate
+                )
+            )
 
         return SweepResult(
-            mode         = "single",
-            ifbw_hz      = ifbw_hz,
-            sweep_times  = sweep_times,
-            all_s11_db   = all_s11_db,
-            freq_hz      = freq_hz_axis,
+            mode="single",
+            ifbw_hz=ifbw_hz,
+            sweep_times=sweep_times,
+            all_s11_db=all_s11_db,
+            freq_hz=freq_hz_axis,
         )
 
 
 # ===========================================================================
 # ContinuousModeSweep
 # ===========================================================================
+
 
 class ContinuousModeSweep(BaseVNASweep):
     """
@@ -837,8 +968,8 @@ class ContinuousModeSweep(BaseVNASweep):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._state_holder    = [None]   # mutable container; callback always reads [0]
-        self._stream_callback = None     # the single registered callback closure
+        self._state_holder = [None]  # mutable container; callback always reads [0]
+        self._stream_callback = None  # the single registered callback closure
 
     # -- Inner helper: shared mutable state guarded by a Lock -----------------
 
@@ -847,17 +978,18 @@ class ContinuousModeSweep(BaseVNASweep):
         All mutable state touched by the streaming callback, bundled into a
         single object so that the lock scope is unambiguous.
         """
+
         def __init__(self, num_points, num_sweeps):
-            self.lock              = threading.Lock()
-            self.done_event        = threading.Event()
-            self.num_points        = num_points
-            self.num_sweeps        = num_sweeps
-            self.sweep_count       = 0
-            self.sweep_start_time  = 0.0
-            self.sweep_end_times   = []      # list[float]
-            self.sweep_start_times = []      # list[float]
-            self.current_s11       = []      # list[complex], current sweep
-            self.all_s11_complex   = []      # list[list[complex]], all completed sweeps
+            self.lock = threading.Lock()
+            self.done_event = threading.Event()
+            self.num_points = num_points
+            self.num_sweeps = num_sweeps
+            self.sweep_count = 0
+            self.sweep_start_time = 0.0
+            self.sweep_end_times = []  # list[float]
+            self.sweep_start_times = []  # list[float]
+            self.current_s11 = []  # list[complex], current sweep
+            self.all_s11_complex = []  # list[list[complex]], all completed sweeps
 
     # -----------------------------------------------------------------------
 
@@ -876,8 +1008,9 @@ class ContinuousModeSweep(BaseVNASweep):
         :VNA:FREQuency:START <Hz>
         :VNA:FREQuency:STOP  <Hz>   -- included because STOP is NOT the trigger here
         """
-        _subsection("Continuous-mode configuration  (IFBW = {} kHz)".format(
-            ifbw_hz // 1000))
+        _subsection(
+            "Continuous-mode configuration  (IFBW = {} kHz)".format(ifbw_hz // 1000)
+        )
 
         vna.cmd(":DEV:MODE VNA")
         print("  Mode            : VNA")
@@ -889,8 +1022,7 @@ class ContinuousModeSweep(BaseVNASweep):
         print("  Stimulus level  : {} dBm".format(self.stim_lvl_dbm))
 
         vna.cmd(":VNA:ACQ:IFBW {}".format(ifbw_hz))
-        print("  IF bandwidth    : {} Hz  ({} kHz)".format(
-            ifbw_hz, ifbw_hz // 1000))
+        print("  IF bandwidth    : {} Hz  ({} kHz)".format(ifbw_hz, ifbw_hz // 1000))
 
         vna.cmd(":VNA:ACQ:AVG {}".format(self.avg_count))
         print("  Averaging       : {} sweep(s)".format(self.avg_count))
@@ -899,12 +1031,18 @@ class ContinuousModeSweep(BaseVNASweep):
         print("  Points          : {}".format(self.num_points))
 
         vna.cmd(":VNA:FREQuency:START {}".format(self.start_freq_hz))
-        print("  Start freq      : {} Hz  ({:.3f} GHz)".format(
-            self.start_freq_hz, self.start_freq_hz / 1e9))
+        print(
+            "  Start freq      : {} Hz  ({:.3f} GHz)".format(
+                self.start_freq_hz, self.start_freq_hz / 1e9
+            )
+        )
 
         vna.cmd(":VNA:FREQuency:STOP {}".format(self.stop_freq_hz))
-        print("  Stop freq       : {} Hz  ({:.3f} GHz)".format(
-            self.stop_freq_hz, self.stop_freq_hz / 1e9))
+        print(
+            "  Stop freq       : {} Hz  ({:.3f} GHz)".format(
+                self.stop_freq_hz, self.stop_freq_hz / 1e9
+            )
+        )
 
     def run_sweeps(self, vna, ifbw_hz):
         """Dispatch to the streaming callback loop."""
@@ -918,20 +1056,21 @@ class ContinuousModeSweep(BaseVNASweep):
         fresh _SweepState between IFBWs; the callback picks up the new state
         on the next point without any remove/re-add of the TCP connection.
         """
+
         def _callback(data):
             state = state_holder[0]
             if state is None:
-                return                          # gap during state swap -- drop silently
+                return  # gap during state swap -- drop silently
             if "Z0" not in data:
                 return
 
-            point_num   = data["pointNum"]
+            point_num = data["pointNum"]
             s11_complex = data["measurements"].get("S11", complex(0, 0))
 
             with state.lock:
                 if point_num == 0:
                     state.sweep_start_time = time.time()
-                    state.current_s11      = []
+                    state.current_s11 = []
 
                 state.current_s11.append(s11_complex)
 
@@ -948,24 +1087,25 @@ class ContinuousModeSweep(BaseVNASweep):
         return _callback
 
     def pre_loop_reset(self, vna):
-        """Register streaming callback ONCE and prepare continuous mode."""
+        """
+        Register streaming callback ONCE and prepare continuous mode.
+        
+        The streaming server is guaranteed to be enabled by run() before
+        this method is called, so we can directly connect without error
+        handling.
+        """
         _subsection("Continuous-mode streaming setup (one-time)")
-
+        
         # Create the persistent callback referencing the mutable state holder
         self._stream_callback = self._make_callback(self._state_holder)
-
+        
         # Stop any residual acquisition before connecting
         vna.cmd(":VNA:ACQ:STOP")
         print("  Pre-stop        : sent")
-
-        try:
-            vna.add_live_callback(STREAMING_PORT, self._stream_callback)
-            print("  Streaming       : callback registered on port {}".format(STREAMING_PORT))
-        except Exception as exc:
-            raise RuntimeError(
-                "Could not connect to streaming server on port {}: {}".format(
-                    STREAMING_PORT, exc)
-            )
+        
+        # Register the streaming callback (streaming server is guaranteed enabled)
+        vna.add_live_callback(STREAMING_PORT, self._stream_callback)
+        print("  Streaming       : callback registered on port {}".format(STREAMING_PORT))
 
     def post_loop_teardown(self, vna):
         """Stop acquisition, restore single mode, remove the streaming callback."""
@@ -1006,8 +1146,11 @@ class ContinuousModeSweep(BaseVNASweep):
         -------
         SweepResult
         """
-        _subsection("Continuous-sweep loop  ({} sweeps, IFBW {} kHz)".format(
-            self.num_sweeps, ifbw_hz // 1000))
+        _subsection(
+            "Continuous-sweep loop  ({} sweeps, IFBW {} kHz)".format(
+                self.num_sweeps, ifbw_hz // 1000
+            )
+        )
 
         # 1. Stop previous IFBW's sweeps
         vna.cmd(":VNA:ACQ:STOP")
@@ -1029,7 +1172,9 @@ class ContinuousModeSweep(BaseVNASweep):
         # 5. Start acquisition
         vna.cmd(":VNA:ACQ:RUN")
         print("  Acquisition     : started (continuous)")
-        print("  Collecting {} sweeps via streaming callback ...".format(self.num_sweeps))
+        print(
+            "  Collecting {} sweeps via streaming callback ...".format(self.num_sweeps)
+        )
 
         # 6. Wait for completion
         completed = fresh_state.done_event.wait(timeout=CONTINUOUS_TIMEOUT_S)
@@ -1040,7 +1185,8 @@ class ContinuousModeSweep(BaseVNASweep):
             raise TimeoutError(
                 "Only {}/{} sweeps received within {} s timeout.  "
                 "Check streaming server connectivity.".format(
-                    fresh_state.sweep_count, self.num_sweeps, CONTINUOUS_TIMEOUT_S)
+                    fresh_state.sweep_count, self.num_sweeps, CONTINUOUS_TIMEOUT_S
+                )
             )
 
         # 7. Stop sweeps for this IFBW (do NOT restore SINGLE TRUE here --
@@ -1051,26 +1197,43 @@ class ContinuousModeSweep(BaseVNASweep):
         # -- Progress printout ---------------------------------------------------
         with fresh_state.lock:
             for i in range(fresh_state.sweep_count):
-                duration = fresh_state.sweep_end_times[i] - fresh_state.sweep_start_times[i]
-                dur_rate = 1.0 / duration if duration > 0 else float('inf')
+                duration = (
+                    fresh_state.sweep_end_times[i] - fresh_state.sweep_start_times[i]
+                )
+                dur_rate = 1.0 / duration if duration > 0 else float("inf")
                 if i == 0:
-                    print("    Sweep {:>2d}/{:<2d}  :  dur {:.4f} s  ({:.1f} Hz)  "
-                          "inter-sweep: --".format(
-                              i + 1, fresh_state.sweep_count, duration, dur_rate))
+                    print(
+                        "    Sweep {:>2d}/{:<2d}  :  dur {:.4f} s  ({:.1f} Hz)  "
+                        "inter-sweep: --".format(
+                            i + 1, fresh_state.sweep_count, duration, dur_rate
+                        )
+                    )
                 else:
-                    interval = fresh_state.sweep_end_times[i] - fresh_state.sweep_end_times[i - 1]
-                    int_rate = 1.0 / interval if interval > 0 else float('inf')
-                    print("    Sweep {:>2d}/{:<2d}  :  dur {:.4f} s  ({:.1f} Hz)  "
-                          "inter-sweep: {:.4f} s  ({:.1f} Hz)".format(
-                              i + 1, fresh_state.sweep_count, duration, dur_rate,
-                              interval, int_rate))
+                    interval = (
+                        fresh_state.sweep_end_times[i]
+                        - fresh_state.sweep_end_times[i - 1]
+                    )
+                    int_rate = 1.0 / interval if interval > 0 else float("inf")
+                    print(
+                        "    Sweep {:>2d}/{:<2d}  :  dur {:.4f} s  ({:.1f} Hz)  "
+                        "inter-sweep: {:.4f} s  ({:.1f} Hz)".format(
+                            i + 1,
+                            fresh_state.sweep_count,
+                            duration,
+                            dur_rate,
+                            interval,
+                            int_rate,
+                        )
+                    )
 
         # -- Convert all sweeps to dB -------------------------------------------
-        freq_hz = list(np.linspace(
-            float(self.start_freq_hz), float(self.stop_freq_hz), self.num_points
-        ))
+        freq_hz = list(
+            np.linspace(
+                float(self.start_freq_hz), float(self.stop_freq_hz), self.num_points
+            )
+        )
 
-        all_s11_db  = []
+        all_s11_db = []
         sweep_times = []
 
         for i in range(fresh_state.sweep_count):
@@ -1087,17 +1250,18 @@ class ContinuousModeSweep(BaseVNASweep):
             all_s11_db.append(s11_db_list)
 
         return SweepResult(
-            mode         = "continuous",
-            ifbw_hz      = ifbw_hz,
-            sweep_times  = sweep_times,
-            all_s11_db   = all_s11_db,
-            freq_hz      = freq_hz,
+            mode="continuous",
+            ifbw_hz=ifbw_hz,
+            sweep_times=sweep_times,
+            all_s11_db=all_s11_db,
+            freq_hz=freq_hz,
         )
 
 
 # ===========================================================================
 # VNAGUIModeSweepTest  --  concrete facade
 # ===========================================================================
+
 
 class VNAGUIModeSweepTest(SingleModeSweep, ContinuousModeSweep):
     """
@@ -1113,8 +1277,9 @@ class VNAGUIModeSweepTest(SingleModeSweep, ContinuousModeSweep):
                 "mode must be 'single' or 'continuous', got '{}'".format(mode)
             )
         # BaseVNASweep.__init__ is called once via super() thanks to MRO.
-        super().__init__(config_path=config_path, mode=mode,
-                         summary=summary, save_data=save_data)
+        super().__init__(
+            config_path=config_path, mode=mode, summary=summary, save_data=save_data
+        )
 
     def configure_sweep(self, vna, ifbw_hz):
         """Dispatch to SingleModeSweep or ContinuousModeSweep configure."""
@@ -1145,15 +1310,12 @@ class VNAGUIModeSweepTest(SingleModeSweep, ContinuousModeSweep):
             ContinuousModeSweep.post_loop_teardown(self, vna)
 
 
-
 # ===========================================================================
 # argparse entry point
 # ===========================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="LibreVNA GUI mode sweep test"
-    )
+    parser = argparse.ArgumentParser(description="LibreVNA GUI mode sweep test")
     parser.add_argument(
         "--config",
         default=os.path.join(SCRIPT_DIR, "sweep_config.yaml"),
