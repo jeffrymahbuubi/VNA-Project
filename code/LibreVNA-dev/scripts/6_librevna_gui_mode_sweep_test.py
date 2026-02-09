@@ -57,6 +57,7 @@ Usage
 
 import sys
 import os
+import platform
 import math
 import time
 import socket
@@ -98,7 +99,15 @@ load_calibration = _mod2.load_calibration
 # Module-level constants (GUI lifecycle, SCPI connection)
 # ---------------------------------------------------------------------------
 
-GUI_BINARY = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI"))
+# OS-dependent GUI binary path
+if platform.system() == "Windows":
+    GUI_BINARY = os.path.normpath(
+        os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI", "release", "LibreVNA-GUI.exe")
+    )
+else:
+    GUI_BINARY = os.path.normpath(
+        os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI")
+    )
 CAL_FILE_PATH = os.path.normpath(
     os.path.join(SCRIPT_DIR, "..", "calibration", "SOLT_1_2_43G-2_45G_300pt.cal")
 )
