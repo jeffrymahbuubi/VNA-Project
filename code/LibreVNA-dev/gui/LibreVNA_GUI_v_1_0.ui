@@ -320,8 +320,79 @@ QPushButton:hover {
      <height>33</height>
     </rect>
    </property>
+   <widget class="QMenu" name="menuDevice">
+    <property name="font">
+     <font>
+      <family>Times New Roman</family>
+      <pointsize>12</pointsize>
+     </font>
+    </property>
+    <property name="title">
+     <string>Device</string>
+    </property>
+    <widget class="QMenu" name="menuConnect_to">
+     <property name="font">
+      <font>
+       <family>Times New Roman</family>
+       <pointsize>12</pointsize>
+      </font>
+     </property>
+     <property name="title">
+      <string>Connect to</string>
+     </property>
+     <addaction name="actionSerial_LibreVNA_USB"/>
+    </widget>
+    <addaction name="menuConnect_to"/>
+   </widget>
+   <widget class="QMenu" name="menuCalibration">
+    <property name="font">
+     <font>
+      <family>Times New Roman</family>
+      <pointsize>12</pointsize>
+     </font>
+    </property>
+    <property name="title">
+     <string>Calibration</string>
+    </property>
+    <addaction name="actionLoad"/>
+   </widget>
+   <widget class="QMenu" name="menuConfiguration">
+    <property name="font">
+     <font>
+      <family>Times New Roman</family>
+      <pointsize>12</pointsize>
+     </font>
+    </property>
+    <property name="title">
+     <string>Configuration</string>
+    </property>
+    <addaction name="actionLoad_yaml_config"/>
+   </widget>
+   <addaction name="menuDevice"/>
+   <addaction name="menuCalibration"/>
+   <addaction name="menuConfiguration"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
+  <action name="actionLoad">
+   <property name="text">
+    <string>Load .cal file</string>
+   </property>
+  </action>
+  <action name="actionLoad_yaml_config">
+   <property name="text">
+    <string>Load .yaml config</string>
+   </property>
+  </action>
+  <action name="actionSerial_LibreVNA_USB">
+   <property name="text">
+    <string>Serial (LibreVNA/USB)</string>
+   </property>
+   <property name="font">
+    <font>
+     <family>Times New Roman</family>
+    </font>
+   </property>
+  </action>
  </widget>
  <resources/>
  <connections/>
