@@ -102,9 +102,10 @@ else:
     GUI_BINARY = os.path.normpath(
         os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI")
     )
-CAL_FILE_PATH = os.path.normpath(
-    os.path.join(SCRIPT_DIR, "..", "calibration", "SOLT_1_2_43G-2_45G_300pt.cal")
-)
+# CAL_FILE_PATH = os.path.normpath(
+#     os.path.join(SCRIPT_DIR, "..", "calibration", "SOLT_1_2_43G-2_45G_300pt.cal")
+# )
+CAL_FILE_PATH = os.path.normpath("SOLT_1_2_43G-2_45G_300pt.cal")
 DATA_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "data"))
 
 SCPI_HOST = "localhost"
@@ -353,7 +354,7 @@ class BaseVNASweep(ABC):
         _section("CALIBRATION LOADING")
 
         # -- Resolve and validate the path ---------------------------------------
-        cal_abs_path = os.path.normpath(os.path.abspath(CAL_FILE_PATH))
+        cal_abs_path = os.path.normpath(CAL_FILE_PATH)
         print("  Cal file path   : {}".format(cal_abs_path))
 
         if not os.path.isfile(cal_abs_path):
