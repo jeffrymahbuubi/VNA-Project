@@ -3,16 +3,22 @@ Backend adapter for GUI integration with script 6 (BaseVNASweep).
 
 This module wraps the monolithic run() method from ContinuousModeSweep into
 discrete lifecycle steps suitable for GUI threading:
-  - start_lifecycle() -> start GUI, connect, load calibration
+  - start_lifecycle() -> start GUI, connect, load calibration, register streaming
   - run_single_ifbw_sweep() -> configure + run sweeps for ONE IFBW value
   - save_results() -> write xlsx workbook
-  - stop_lifecycle() -> terminate GUI subprocess
+  - stop_lifecycle() -> teardown streaming, terminate GUI subprocess
 
 Also provides a lightweight probe_device_serial() function for startup device
 detection without requiring the full sweep infrastructure.
 
 Threading contract: All methods except callbacks are called from QThread worker.
 Callbacks are passed by caller and should emit Qt signals for thread-safe GUI updates.
+
+Key fix (2026-02-10): The adapter now calls pre_loop_reset() and post_loop_teardown()
+to properly register/deregister the streaming callback. Without these calls the
+streaming data callback was never connected, causing:
+  - Infinite sweep loop (done_event never set, 300s timeout)
+  - No plot updates (GUI callback never triggered)
 """
 
 import sys
@@ -21,9 +27,12 @@ import socket
 import time
 import subprocess
 import platform
+import logging
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Import from local backend module (standalone)
 from .vna_backend import (
@@ -218,7 +227,7 @@ class GUIVNASweepAdapter:
         # Initialize sweep instance (continuous mode only)
         self.sweep = ContinuousModeSweep(
             config_path=self.temp_config_path,
-            cal_file_path=self.cal_file_path,  # NEW parameter
+            cal_file_path=self.cal_file_path,
             mode="continuous",
             summary=False,  # No console output in GUI
             save_data=False  # We'll handle saving separately
@@ -228,6 +237,11 @@ class GUIVNASweepAdapter:
         self.gui_process = None
         self.vna = None
         self.all_results: List[SweepResult] = []
+
+        # Mutable GUI callback reference -- updated per-IFBW by run_single_ifbw_sweep().
+        # The streaming callback wrapper reads this to dispatch sweep-complete events
+        # to the GUI thread via Qt signals.  Set to None when no GUI callback is needed.
+        self._gui_callback: Optional[Callable[[int, np.ndarray, np.ndarray], None]] = None
 
     def _create_temp_config(self) -> str:
         """
@@ -263,7 +277,16 @@ class GUIVNASweepAdapter:
 
     def start_lifecycle(self) -> Dict[str, str]:
         """
-        Start GUI subprocess, connect to SCPI, load calibration.
+        Start GUI subprocess, connect to SCPI, load calibration, register streaming.
+
+        This method mirrors the startup sequence in BaseVNASweep.run() but broken
+        into explicit steps suitable for the GUI adapter:
+          1. Start GUI subprocess
+          2. Connect to SCPI server and verify device
+          3. Load calibration file
+          4. Enable streaming server (may require GUI restart)
+          5. Install GUI callback hook (ONCE - reads mutable _gui_callback ref)
+          6. Register streaming callback via pre_loop_reset()
 
         Returns:
             Dictionary with device info: {'serial': ..., 'idn': ...}
@@ -282,15 +305,34 @@ class GUIVNASweepAdapter:
         parts = [p.strip() for p in idn_raw.split(",")]
         serial = parts[2] if len(parts) > 2 else "Unknown"
 
-        # Step 3: Load calibration file
-        # Note: load_calibration() now takes cal_file_path as parameter and raises exceptions on failure
+        # Step 3: Enable streaming server (required for continuous mode).
+        # enable_streaming_server() returns True if the preference was changed
+        # and APPLYPREFERENCES terminated the GUI.  In that case we must restart.
+        needs_restart = self.sweep.enable_streaming_server(self.vna)
+        if needs_restart:
+            logger.info("Streaming server enabled -- restarting GUI subprocess")
+            self.sweep.stop_gui(self.gui_process)
+            self.gui_process = self.sweep.start_gui()
+            self.vna = self.sweep.connect_and_verify()
+
+        # Step 4: Load calibration file (after potential restart so the new
+        # GUI instance has the calibration loaded).
         try:
             self.sweep.load_calibration(self.vna, self.cal_file_path)
         except (FileNotFoundError, RuntimeError) as e:
             raise RuntimeError(f"Failed to load calibration: {self.cal_file_path}") from e
 
-        # Step 4: Enable streaming server (required for continuous mode)
-        self.sweep.enable_streaming_server(self.vna)
+        # Step 5: Install the GUI callback hook ONCE.
+        # This monkey-patches _make_callback so the streaming callback also
+        # dispatches sweep-complete events to the GUI via _gui_callback.
+        self._install_callback_hook_once()
+
+        # Step 6: Register streaming callback via pre_loop_reset().
+        # This sends ACQ:STOP and calls vna.add_live_callback() to connect
+        # the TCP streaming client on port 19001.  Without this call, no
+        # streaming data arrives and done_event is never set (root cause of
+        # the infinite sweep loop bug).
+        self.sweep.pre_loop_reset(self.vna)
 
         return {
             'serial': serial,
@@ -305,10 +347,15 @@ class GUIVNASweepAdapter:
         """
         Configure and run sweeps for a single IFBW value.
 
+        The streaming callback was registered ONCE in start_lifecycle() via
+        pre_loop_reset().  This method only updates the mutable GUI callback
+        reference and runs the sweep loop.
+
         Args:
             ifbw_hz: IF bandwidth in Hz
-            callback: Called after each sweep with (sweep_idx, freq_hz, s11_db)
-                      This should emit Qt signals for thread-safe GUI updates
+            callback: Called after each sweep with (sweep_idx, freq_hz, s11_db).
+                      This should emit Qt signals for thread-safe GUI updates.
+                      Set to None to disable GUI callbacks for this IFBW.
 
         Returns:
             SweepResult object with timing metrics and trace data
@@ -316,11 +363,14 @@ class GUIVNASweepAdapter:
         # Configure SCPI parameters for this IFBW
         self.sweep.configure_sweep(self.vna, ifbw_hz)
 
-        # Inject callback wrapper into sweep instance
-        if callback:
-            self._install_callback_hook(callback)
+        # Update the mutable GUI callback reference.  The streaming callback
+        # wrapper (installed once by _install_callback_hook_once) reads this
+        # on every sweep completion.  No re-patching needed per IFBW.
+        self._gui_callback = callback
 
-        # Run the sweep loop (blocking until all sweeps complete)
+        # Run the sweep loop (blocking until all sweeps complete or timeout).
+        # The streaming callback accumulates data and sets done_event when
+        # sweep_count reaches num_sweeps.
         result = self.sweep.run_sweeps(self.vna, ifbw_hz)
 
         # Store result for later xlsx export
@@ -328,56 +378,91 @@ class GUIVNASweepAdapter:
 
         return result
 
-    def _install_callback_hook(self, callback: Callable):
+    def _install_callback_hook_once(self):
         """
-        Monkey-patch the sweep instance to call our callback.
+        Monkey-patch the sweep instance's _make_callback ONCE to inject GUI updates.
 
-        This intercepts the internal streaming callback to inject GUI updates.
+        This wraps _make_callback so that the streaming callback (created in
+        pre_loop_reset) also dispatches sweep-complete events to the GUI via
+        the mutable self._gui_callback reference.
+
+        Must be called BEFORE pre_loop_reset(), which invokes _make_callback
+        to create the actual streaming closure.
+
+        The wrapper reads self._gui_callback on each sweep completion, so the
+        GUI callback can be updated per-IFBW without re-patching.  This avoids
+        the double-wrapping bug that occurred when _install_callback_hook was
+        called once per IFBW.
+
+        Thread safety: The wrapper runs on the streaming thread (libreVNA's
+        TCP background thread).  It emits data via self._gui_callback which
+        should call QThread.signal.emit() -- Qt handles the thread marshalling.
         """
         original_make_callback = self.sweep._make_callback
+        adapter = self  # capture for closure
 
         def wrapped_make_callback(state_holder):
-            # Get the original streaming callback
+            # Get the original streaming callback (handles data accumulation
+            # and done_event signaling)
             original_callback = original_make_callback(state_holder)
 
-            # Wrap it to extract data for GUI
-            def gui_callback(datapoint):
-                # Call original callback first (accumulates data)
+            # Wrap it to also dispatch to the GUI callback
+            def gui_aware_callback(datapoint):
+                # Call original callback first (accumulates data in _SweepState,
+                # increments sweep_count, sets done_event when target reached)
                 original_callback(datapoint)
 
-                # After sweep completes, extract data for GUI
+                # After sweep completes (last point received), extract data for GUI
                 state = state_holder[0]
-                if state and datapoint['pointNum'] == state.num_points - 1:
-                    # Last point of sweep → full sweep ready
+                if state is None:
+                    return
+
+                if datapoint.get('pointNum') == state.num_points - 1:
+                    # Last point of sweep -- full sweep data is now available
                     with state.lock:
                         if state.all_s11_complex:
                             sweep_idx = len(state.all_s11_complex) - 1
-                            s11_complex = state.all_s11_complex[-1]
+                            s11_complex = np.array(state.all_s11_complex[-1])
 
-                            # Convert to dB
-                            s11_db = 20 * np.log10(np.abs(s11_complex))
+                            # Convert complex S11 to magnitude in dB
+                            s11_db = 20 * np.log10(
+                                np.maximum(np.abs(s11_complex), 1e-12)
+                            )
 
                             # Build frequency array
                             freq_hz = np.linspace(
-                                self.sweep.start_freq_hz,
-                                self.sweep.stop_freq_hz,
-                                self.sweep.num_points
+                                adapter.sweep.start_freq_hz,
+                                adapter.sweep.stop_freq_hz,
+                                adapter.sweep.num_points
                             )
 
-                            # Call user callback (should emit Qt signal)
-                            callback(sweep_idx, freq_hz, s11_db)
+                            # Dispatch to current GUI callback (if set)
+                            cb = adapter._gui_callback
+                            if cb is not None:
+                                try:
+                                    cb(sweep_idx, freq_hz, s11_db)
+                                except Exception as exc:
+                                    logger.warning(
+                                        "GUI callback error (sweep %d): %s",
+                                        sweep_idx, exc
+                                    )
 
-            return gui_callback
+            return gui_aware_callback
 
-        # Install monkey patch
+        # Install monkey patch (ONCE -- never call this method again)
         self.sweep._make_callback = wrapped_make_callback
 
     def save_results(self, custom_filename: Optional[str] = None) -> str:
         """
         Export all accumulated results to multi-sheet xlsx workbook.
 
+        Uses the backend's save_xlsx() method which writes to the standard
+        output directory (../../data/YYYYMMDD/ relative to the backend module).
+
         Args:
-            custom_filename: Optional custom filename (without extension)
+            custom_filename: Optional custom filename (without extension).
+                If provided, the file is saved with this name in the standard
+                output directory instead of the auto-generated timestamp name.
 
         Returns:
             Absolute path to saved xlsx file
@@ -385,48 +470,54 @@ class GUIVNASweepAdapter:
         if not self.all_results:
             raise ValueError("No sweep results to save")
 
-        # Temporarily restore save_data flag
-        original_save_data = self.sweep.save_data
-        self.sweep.save_data = True
+        # Build output directory (same as vna_backend.py default: ../../data/YYYYMMDD/)
+        import datetime
+        today = datetime.datetime.now().strftime("%Y%m%d")
+        out_dir = os.path.join(_MODULE_DIR, "..", "..", "data", today)
+        os.makedirs(out_dir, exist_ok=True)
 
-        # Override filename if provided
         if custom_filename:
-            import datetime
-            today = datetime.datetime.now().strftime("%Y%m%d")
-            out_dir = Path(SCRIPT_DIR).parent / "data" / today
-            out_dir.mkdir(parents=True, exist_ok=True)
-            xlsx_path = out_dir / f"{custom_filename}.xlsx"
+            # Save with custom filename directly using save_xlsx's output_dir param
+            xlsx_path = self.sweep.save_xlsx(self.all_results, output_dir=out_dir)
 
-            # Temporarily patch the save_xlsx method to use custom path
-            original_save = self.sweep.save_xlsx
-
-            def custom_save(results):
-                path = original_save(results)
-                # Move to custom location
-                import shutil
-                shutil.move(path, xlsx_path)
-                return str(xlsx_path)
-
-            self.sweep.save_xlsx = custom_save
-
-        # Call save method
-        xlsx_path = self.sweep.save_xlsx(self.all_results)
-
-        # Restore original state
-        self.sweep.save_data = original_save_data
+            # Rename to custom filename (save_xlsx uses auto-generated name)
+            custom_path = os.path.join(out_dir, f"{custom_filename}.xlsx")
+            try:
+                if os.path.exists(custom_path):
+                    os.unlink(custom_path)
+                os.rename(xlsx_path, custom_path)
+                xlsx_path = custom_path
+            except Exception as exc:
+                logger.warning("Could not rename xlsx to custom name: %s", exc)
+                # Fall back to auto-generated name (already saved)
+        else:
+            xlsx_path = self.sweep.save_xlsx(self.all_results, output_dir=out_dir)
 
         return xlsx_path
 
     def stop_lifecycle(self):
         """
-        Terminate GUI subprocess and close all connections gracefully.
+        Teardown streaming, terminate GUI subprocess, and close connections.
 
-        Cleanup sequence:
-          1. Close SCPI socket and streaming threads (via libreVNA.close())
-          2. Terminate LibreVNA-GUI subprocess (SIGTERM -> SIGKILL)
-          3. Remove temporary config file
+        Cleanup sequence (order matters):
+          1. post_loop_teardown() -- stop acquisition, restore single mode,
+             remove streaming callback (requires live SCPI connection)
+          2. Close SCPI socket and streaming threads (via libreVNA.close())
+          3. Terminate LibreVNA-GUI subprocess (SIGTERM -> SIGKILL)
+          4. Remove temporary config file
+
+        Safe to call multiple times (idempotent).
         """
-        # Step 1: Close SCPI connection and streaming threads
+        # Step 1: Teardown streaming callback and stop acquisition.
+        # This must happen BEFORE closing the SCPI connection because
+        # post_loop_teardown sends ACQ:STOP and removes the live callback.
+        if self.vna is not None:
+            try:
+                self.sweep.post_loop_teardown(self.vna)
+            except Exception as exc:
+                logger.warning("post_loop_teardown error (non-fatal): %s", exc)
+
+        # Step 2: Close SCPI connection and streaming threads
         if self.vna is not None:
             try:
                 self.vna.close()
@@ -434,7 +525,7 @@ class GUIVNASweepAdapter:
                 pass
             self.vna = None
 
-        # Step 2: Terminate GUI subprocess
+        # Step 3: Terminate GUI subprocess
         if self.gui_process:
             try:
                 self.sweep.stop_gui(self.gui_process)
@@ -447,12 +538,15 @@ class GUIVNASweepAdapter:
                     pass
             self.gui_process = None
 
-        # Step 3: Clean up temp config file
+        # Step 4: Clean up temp config file
         if hasattr(self, 'temp_config_path') and os.path.exists(self.temp_config_path):
             try:
                 os.unlink(self.temp_config_path)
             except Exception:
                 pass
+
+        # Clear GUI callback reference
+        self._gui_callback = None
 
     def get_device_serial(self) -> str:
         """Query device serial number (DEV:CONN?)."""

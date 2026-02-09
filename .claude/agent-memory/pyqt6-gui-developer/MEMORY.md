@@ -75,10 +75,37 @@ uv run python 7_realtime_vna_plotter_mvp.py
 - Presenter `_on_window_closing()` -> `cleanup()` orchestrates all teardown
 - Cleanup order: (1) stop probe worker, (2) stop sweep worker + adapter, (3) kill probe GUI subprocess
 - `libreVNA.close()` explicitly stops streaming threads (clears callbacks -> thread loop exits) + closes SCPI socket
-- `GUIVNASweepAdapter.stop_lifecycle()` calls `vna.close()` then `stop_gui()` then deletes temp config
+- `GUIVNASweepAdapter.stop_lifecycle()` calls `post_loop_teardown()` -> `vna.close()` -> `stop_gui()` -> delete temp
 - Signal disconnection before thread stop prevents stale callbacks into destroyed View
 - QThread.wait(timeout_ms) with terminate() fallback for threads doing blocking I/O
 - Logging via `logging.getLogger(__name__)` in presenter; configured in entry point
+
+## Critical Bug Fix: Streaming Callback Not Registered (Fixed 2026-02-10)
+**Root cause of BOTH infinite sweep loop AND missing plot updates.**
+
+The `GUIVNASweepAdapter` was missing calls to `pre_loop_reset()` and `post_loop_teardown()`:
+- `pre_loop_reset()` registers the TCP streaming callback via `vna.add_live_callback(19001, cb)`
+- Without it, the callback created by `_make_callback()` was never connected to the TCP stream
+- `done_event.wait(300)` would timeout because no streaming data arrived to increment sweep_count
+- The GUI callback (for plot updates) was also never triggered because it was wired into the missing callback chain
+
+**Fix (backend_wrapper.py):**
+1. `start_lifecycle()` now calls `_install_callback_hook_once()` then `self.sweep.pre_loop_reset(self.vna)`
+2. `stop_lifecycle()` now calls `self.sweep.post_loop_teardown(self.vna)` BEFORE closing connection
+3. `_install_callback_hook_once()` replaces per-IFBW `_install_callback_hook()` -- avoids double-wrapping
+4. Uses mutable `self._gui_callback` reference that's updated per-IFBW (no re-patching)
+5. `enable_streaming_server()` restart case properly handled (stop old GUI -> restart -> reconnect)
+
+**Lesson:** When extracting a monolithic `run()` method into lifecycle steps, ALL lifecycle hooks must be preserved. The adapter skipped `pre_loop_reset()` and `post_loop_teardown()` which were called in `BaseVNASweep.run()`.
+
+## Button Blink Fix (2026-02-10)
+- Old: `setVisible(True/False)` caused layout shifts and "button disappearing"
+- New: Color alternation between bright red `rgb(239,68,68)` and dark red `rgb(185,28,28)`
+- Timer interval: 600ms (from 500ms) for smoother visual pulse
+
+## save_results() SCRIPT_DIR Bug (Fixed 2026-02-10)
+- Old code referenced `SCRIPT_DIR` (from removed dynamic import) -- caused NameError
+- Fixed to use `_MODULE_DIR` from vna_backend.py
 
 ## Key Patterns
 - See [patterns.md](patterns.md) for detailed patterns (to be created as needed)

@@ -171,18 +171,24 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         Toggle button appearance between ready and collecting states.
 
         Args:
-            collecting: True = red blinking "Collecting Data..."
-                       False = green "Collect Data"
+            collecting: True = red pulsing "Collecting Data..." (disabled)
+                       False = green "Collect Data" (enabled)
+
+        The pulsing animation alternates between bright red and dark red
+        via stylesheet changes rather than visibility toggling, which avoids
+        layout shifts and the button "disappearing" during collection.
         """
         if collecting:
             self.pushButton.setText("Collecting Data...")
             self.pushButton.setStyleSheet(
                 "QPushButton { background-color: rgb(239, 68, 68); "
                 "border-style: solid; border-width: 2px; border-radius: 10px; "
-                "border-color: rgb(239, 68, 68); }"
+                "border-color: rgb(239, 68, 68); "
+                "color: white; }"
             )
             self.pushButton.setEnabled(False)
-            self.blink_timer.start(500)  # Blink every 500ms
+            self._blink_state = False
+            self.blink_timer.start(600)  # Pulse every 600ms
         else:
             self.pushButton.setText("Collect Data")
             self.pushButton.setStyleSheet(
@@ -193,12 +199,31 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             )
             self.pushButton.setEnabled(True)
             self.blink_timer.stop()
-            self.pushButton.setVisible(True)  # Ensure visible after blink
 
     def _toggle_button_blink(self):
-        """Internal: Toggle button visibility for blink animation."""
+        """
+        Internal: Alternate button color for pulse animation.
+
+        Uses color alternation (bright red / dark red) instead of visibility
+        toggling to prevent layout shifts and button flickering.
+        """
         self._blink_state = not self._blink_state
-        self.pushButton.setVisible(self._blink_state)
+        if self._blink_state:
+            # Dark red phase
+            self.pushButton.setStyleSheet(
+                "QPushButton { background-color: rgb(185, 28, 28); "
+                "border-style: solid; border-width: 2px; border-radius: 10px; "
+                "border-color: rgb(185, 28, 28); "
+                "color: white; }"
+            )
+        else:
+            # Bright red phase
+            self.pushButton.setStyleSheet(
+                "QPushButton { background-color: rgb(239, 68, 68); "
+                "border-style: solid; border-width: 2px; border-radius: 10px; "
+                "border-color: rgb(239, 68, 68); "
+                "color: white; }"
+            )
 
     def update_plot(self, freq_hz: np.ndarray, s11_db: np.ndarray):
         """
