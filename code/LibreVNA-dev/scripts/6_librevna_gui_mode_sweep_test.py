@@ -220,7 +220,7 @@ class BaseVNASweep(ABC):
             env["QT_QPA_PLATFORM"] = "offscreen"
 
         proc = subprocess.Popen(
-            [GUI_BINARY, "--port", str(SCPI_PORT)],
+            [GUI_BINARY, "--port", str(SCPI_PORT), "--no-gui"],
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
