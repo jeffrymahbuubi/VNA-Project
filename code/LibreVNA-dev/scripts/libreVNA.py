@@ -122,7 +122,7 @@ class libreVNA:
         if status < 0 or status > 255:
             raise Exception(f"*ESR? returned invalid value {status}.")
         return status
-        
+
     def add_live_callback(self, port, callback):
         # check if we already have a thread handling this connection
         if not port in self.live_threads:
@@ -145,7 +145,8 @@ class libreVNA:
             # remove all matching callbacks from the list
             self.live_callbacks[port] = [cb for cb in self.live_callbacks[port] if cb != callback]
             # if the list is now empty, the thread will exit
-            if len(self.live_callbacks) == 0:
+            # BUG FIX: Check length of the port-specific list, not the entire dict
+            if len(self.live_callbacks[port]) == 0:
                 self.live_threads[port].join()
                 del self.live_threads[port]
 
@@ -175,8 +176,8 @@ class libreVNA:
             except:
                 # ignore timeouts
                 pass
-    
-    
+
+
     @staticmethod
     def parse_VNA_trace_data(data):
         ret = []
@@ -192,7 +193,7 @@ class libreVNA:
             imag = float(values[i+2])
             ret.append((freq, complex(real, imag)))
         return ret
-    
+
     @staticmethod
     def parse_SA_trace_data(data):
         ret = []
@@ -207,4 +208,3 @@ class libreVNA:
             dBm = float(values[i+1])
             ret.append((freq, dBm))
         return ret
-

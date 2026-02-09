@@ -25,29 +25,13 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 import numpy as np
 
-# Add scripts directory to path for importing backend
-SCRIPT_DIR = Path(__file__).parent.parent.parent / "scripts"
-sys.path.insert(0, str(SCRIPT_DIR))
-
-from importlib import import_module
-from libreVNA import libreVNA
-
-# Dynamically import script 6 to avoid naming conflicts (starts with digit)
-script6_module = import_module("6_librevna_gui_mode_sweep_test")
-ContinuousModeSweep = script6_module.ContinuousModeSweep
-SweepResult = script6_module.SweepResult
-
-# SCPI connection constants (matching script 6)
-SCPI_HOST = "localhost"
-SCPI_PORT = 19542
-GUI_START_TIMEOUT_S = 30.0
-
-# OS-dependent GUI binary path
-if platform.system() == "Windows":
-    GUI_BINARY = str(Path(SCRIPT_DIR) / ".." / "tools" / "LibreVNA-GUI" / "release" / "LibreVNA-GUI.exe")
-else:
-    GUI_BINARY = str(Path(SCRIPT_DIR) / ".." / "tools" / "LibreVNA-GUI")
-GUI_BINARY = os.path.normpath(GUI_BINARY)
+# Import from local backend module (standalone)
+from .vna_backend import (
+    ContinuousModeSweep, SweepResult,
+    SCPI_HOST, SCPI_PORT, GUI_START_TIMEOUT_S,
+    GUI_BINARY, _MODULE_DIR,
+)
+from .libreVNA import libreVNA
 
 
 def _is_scpi_server_running(host: str = SCPI_HOST, port: int = SCPI_PORT,
@@ -101,6 +85,7 @@ def _start_gui_subprocess() -> subprocess.Popen:
     proc = subprocess.Popen(
         [GUI_BINARY, "--port", str(SCPI_PORT), "--no-gui"],
         env=env,
+        cwd=_MODULE_DIR,  # CWD = gui/mvp/ so .cal filenames resolve correctly
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -233,6 +218,7 @@ class GUIVNASweepAdapter:
         # Initialize sweep instance (continuous mode only)
         self.sweep = ContinuousModeSweep(
             config_path=self.temp_config_path,
+            cal_file_path=self.cal_file_path,  # NEW parameter
             mode="continuous",
             summary=False,  # No console output in GUI
             save_data=False  # We'll handle saving separately
@@ -297,9 +283,11 @@ class GUIVNASweepAdapter:
         serial = parts[2] if len(parts) > 2 else "Unknown"
 
         # Step 3: Load calibration file
-        success = self.sweep.load_calibration(self.vna, self.cal_file_path)
-        if not success:
-            raise RuntimeError(f"Failed to load calibration: {self.cal_file_path}")
+        # Note: load_calibration() now takes cal_file_path as parameter and raises exceptions on failure
+        try:
+            self.sweep.load_calibration(self.vna, self.cal_file_path)
+        except (FileNotFoundError, RuntimeError) as e:
+            raise RuntimeError(f"Failed to load calibration: {self.cal_file_path}") from e
 
         # Step 4: Enable streaming server (required for continuous mode)
         self.sweep.enable_streaming_server(self.vna)
@@ -431,14 +419,40 @@ class GUIVNASweepAdapter:
 
     def stop_lifecycle(self):
         """
-        Terminate GUI subprocess gracefully.
-        """
-        if self.gui_process:
-            self.sweep.stop_gui(self.gui_process)
+        Terminate GUI subprocess and close all connections gracefully.
 
-        # Clean up temp config file
+        Cleanup sequence:
+          1. Close SCPI socket and streaming threads (via libreVNA.close())
+          2. Terminate LibreVNA-GUI subprocess (SIGTERM -> SIGKILL)
+          3. Remove temporary config file
+        """
+        # Step 1: Close SCPI connection and streaming threads
+        if self.vna is not None:
+            try:
+                self.vna.close()
+            except Exception:
+                pass
+            self.vna = None
+
+        # Step 2: Terminate GUI subprocess
+        if self.gui_process:
+            try:
+                self.sweep.stop_gui(self.gui_process)
+            except Exception:
+                # Fallback: force-kill if stop_gui fails
+                try:
+                    self.gui_process.kill()
+                    self.gui_process.wait(timeout=5)
+                except Exception:
+                    pass
+            self.gui_process = None
+
+        # Step 3: Clean up temp config file
         if hasattr(self, 'temp_config_path') and os.path.exists(self.temp_config_path):
-            os.unlink(self.temp_config_path)
+            try:
+                os.unlink(self.temp_config_path)
+            except Exception:
+                pass
 
     def get_device_serial(self) -> str:
         """Query device serial number (DEV:CONN?)."""

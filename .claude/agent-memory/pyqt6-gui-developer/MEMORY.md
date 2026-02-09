@@ -19,8 +19,25 @@
 - Model: Pure Python, no Qt deps (`mvp/model.py`)
 - View: PySide6 + Ui_MainWindow multiple inheritance (`mvp/view.py`)
 - Presenter: Signal wiring, QThread worker (`mvp/presenter.py`)
+- Backend: `mvp/vna_backend.py` (standalone, extracted from script 6)
+- Backend adapter: `mvp/backend_wrapper.py` (GUI-friendly lifecycle steps)
+- SCPI wrapper: `mvp/libreVNA.py` (local copy, line 148 bug fixed)
 - Entry: `7_realtime_vna_plotter_mvp.py`
-- Auto-detects `.cal` and `sweep_config.yaml` in `gui/` on startup
+- Auto-detects `.cal` in `gui/mvp/` and `sweep_config.yaml` in `gui/` on startup
+
+## Calibration File Path Strategy (Fixed 2026-02-10)
+- `.cal` file lives in `gui/mvp/` (colocated with backend scripts)
+- Presenter stores just the FILENAME (not full path) in model.calibration.file_path
+- `vna_backend.py` `load_calibration()` resolves filename relative to `_MODULE_DIR` for existence check
+- SCPI `:VNA:CAL:LOAD?` receives ONLY the filename (e.g. `SOLT_1_2_43G-2_45G_300pt.cal`)
+- GUI subprocess CWD is set to `_MODULE_DIR` (`gui/mvp/`) so filename resolves correctly
+- **Why:** Full Windows paths with spaces (e.g. `D:\AUNUUN JEFFRY MAHBUUBI\...`) break SCPI parsing
+
+## Backend Standalone Deployment (Refactored 2026-02-10)
+- `backend_wrapper.py` imports from local `vna_backend` (NOT dynamic import from scripts/)
+- Key imports: `ContinuousModeSweep, SweepResult, SCPI_HOST, SCPI_PORT, GUI_START_TIMEOUT_S, GUI_BINARY, _MODULE_DIR`
+- GUI binary path built from `_MODULE_DIR`: `../../tools/LibreVNA-GUI/release/LibreVNA-GUI.exe` (Windows)
+- No dependency on `scripts/` directory -- GUI is deployment-independent
 
 ## Widget Name Mapping (.ui -> model)
 - start_frequency -> startFrequencyLineEdit
@@ -52,6 +69,16 @@ uv run python 7_realtime_vna_plotter_mvp.py
 - View display methods should manage their own widget states (enabled/disabled/text)
 - Example: `set_device_serial()` both sets text AND re-enables the action
 - Presenter calls View methods only, never `self.view.some_widget.method()`
+
+## Cleanup/Shutdown Pattern (Implemented 2026-02-10)
+- View emits `window_closing` signal in `closeEvent()` (passive -- no business logic)
+- Presenter `_on_window_closing()` -> `cleanup()` orchestrates all teardown
+- Cleanup order: (1) stop probe worker, (2) stop sweep worker + adapter, (3) kill probe GUI subprocess
+- `libreVNA.close()` explicitly stops streaming threads (clears callbacks -> thread loop exits) + closes SCPI socket
+- `GUIVNASweepAdapter.stop_lifecycle()` calls `vna.close()` then `stop_gui()` then deletes temp config
+- Signal disconnection before thread stop prevents stale callbacks into destroyed View
+- QThread.wait(timeout_ms) with terminate() fallback for threads doing blocking I/O
+- Logging via `logging.getLogger(__name__)` in presenter; configured in entry point
 
 ## Key Patterns
 - See [patterns.md](patterns.md) for detailed patterns (to be created as needed)

@@ -10,7 +10,7 @@ inheritance so that all widget attributes are directly accessible as self.xxx.
 
 from PySide6.QtWidgets import QMainWindow, QMessageBox
 from PySide6.QtCore import Signal, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QCloseEvent
 import pyqtgraph as pg
 import numpy as np
 from pathlib import Path
@@ -34,6 +34,7 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
     load_config_requested = Signal()
     connect_device_requested = Signal()  # Emitted when user clicks Device > Connect to > serial action
     config_changed = Signal()  # Emitted when user edits any config widget
+    window_closing = Signal()  # Emitted when user closes the window (X button, Alt+F4, etc.)
 
     def __init__(self):
         """
@@ -412,3 +413,30 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             text: Progress text (e.g., "IFBW 150 kHz - Sweep 5/30")
         """
         self.statusbar.showMessage(text, 0)
+
+    # -----------------------------------------------------------------------
+    # Window close event
+    # -----------------------------------------------------------------------
+
+    def closeEvent(self, event: QCloseEvent):
+        """
+        Override to emit window_closing signal before accepting close.
+
+        The Presenter subscribes to window_closing and performs all cleanup
+        (stopping worker threads, terminating subprocesses, closing sockets).
+        The View remains passive -- it only signals intent to close.
+
+        Args:
+            event: The close event from Qt (X button, Alt+F4, programmatic close)
+        """
+        # Stop the blink timer (owned by View, so cleaned up here)
+        self.blink_timer.stop()
+
+        # Notify Presenter to run cleanup logic
+        self.window_closing.emit()
+
+        # Show cleanup in status bar (may not render if cleanup is fast)
+        self.statusbar.showMessage("Shutting down...", 0)
+
+        # Accept the close event
+        event.accept()

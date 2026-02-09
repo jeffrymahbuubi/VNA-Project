@@ -38,11 +38,19 @@ Dependencies:
 
 import sys
 import os
+import logging
 from pathlib import Path
 
 # Change to gui/ directory for relative path resolution
 GUI_DIR = Path(__file__).parent
 os.chdir(GUI_DIR)
+
+# Configure logging so cleanup messages are visible in the console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 # Import Qt before other imports (required on some platforms)
 from PySide6.QtWidgets import QApplication

@@ -12,9 +12,12 @@ Worker threads:
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import QFileDialog
 from pathlib import Path
+import logging
 import yaml
 import numpy as np
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .model import VNADataModel, SweepConfig
 from .view import VNAMainWindow
@@ -193,6 +196,7 @@ class VNAPresenter(QObject):
         self.view.load_config_requested.connect(self._on_load_config_requested)
         self.view.connect_device_requested.connect(self._on_connect_device_requested)
         self.view.config_changed.connect(self._on_config_changed)
+        self.view.window_closing.connect(self._on_window_closing)
 
     # -----------------------------------------------------------------------
     # Startup - Auto-detection
@@ -202,16 +206,23 @@ class VNAPresenter(QObject):
         """
         Auto-detect calibration and config files on startup.
 
+        Checks gui/mvp/ directory for:
+          - SOLT_1_2_43G-2_45G_300pt.cal (colocated with backend)
         Checks gui/ directory for:
-          - SOLT_1_2_43G-2_45G_300pt.cal
           - sweep_config.yaml
         """
         gui_dir = Path(__file__).parent.parent
+        mvp_dir = Path(__file__).parent  # gui/mvp/ -- colocated with backend
 
-        # Check for calibration file
-        cal_path = gui_dir / "SOLT_1_2_43G-2_45G_300pt.cal"
+        # Check for calibration file in gui/mvp/ (colocated with backend scripts).
+        # Store just the filename -- the backend resolves it relative to _MODULE_DIR
+        # and the GUI subprocess CWD is set to gui/mvp/, so the SCPI :VNA:CAL:LOAD?
+        # command receives only the filename, avoiding full Windows paths with spaces
+        # that break SCPI parsing.
+        cal_path = mvp_dir / "SOLT_1_2_43G-2_45G_300pt.cal"
         if cal_path.exists():
-            self.model.calibration.file_path = str(cal_path)
+            # Store just the filename -- avoids full Windows paths in SCPI commands
+            self.model.calibration.file_path = cal_path.name
             self.model.calibration.loaded = True
             self.view.set_calibration_status(True, cal_path.name)
             self.view.show_status_message(
@@ -219,7 +230,7 @@ class VNAPresenter(QObject):
             )
         else:
             self.view.show_status_message(
-                "No calibration file found in gui/", timeout=0
+                "No calibration file found in gui/mvp/", timeout=0
             )
 
         # Check for sweep config YAML
@@ -655,3 +666,139 @@ class VNAPresenter(QObject):
         # If ready but not collecting, show green button
         if ready and not self._collecting:
             self.view.set_collecting_state(False)
+
+    # -----------------------------------------------------------------------
+    # Cleanup / Shutdown
+    # -----------------------------------------------------------------------
+
+    @Slot()
+    def _on_window_closing(self):
+        """
+        Handle window close event from View.
+
+        Called when the user closes the window (X button, Alt+F4, or
+        programmatic close). Delegates to cleanup() for all resource
+        teardown.
+        """
+        logger.info("Window closing -- starting cleanup")
+        self.cleanup()
+
+    def cleanup(self):
+        """
+        Stop all background operations and release resources before shutdown.
+
+        Cleanup sequence (order matters for avoiding port conflicts):
+          1. Stop DeviceProbeWorker (if running)
+          2. Stop VNASweepWorker and its adapter (if collecting)
+          3. Terminate GUI subprocess started by device probe (if any)
+
+        Each step uses graceful shutdown (quit+wait) with a timeout,
+        falling back to forced termination if the timeout expires.
+
+        Thread safety: This method runs on the GUI thread. Worker threads
+        are stopped via QThread.quit() which posts a quit event to their
+        event loop, then wait() blocks until the thread finishes.
+
+        Safe to call multiple times (idempotent).
+        """
+        # Step 1: Stop device probe worker thread
+        self._stop_probe_worker()
+
+        # Step 2: Stop sweep worker thread (and its adapter subprocess)
+        self._stop_sweep_worker()
+
+        # Step 3: Terminate probe GUI subprocess (started during detection)
+        self._stop_probe_gui_process()
+
+        logger.info("Cleanup complete")
+
+    def _stop_probe_worker(self):
+        """
+        Stop the DeviceProbeWorker QThread if it is running.
+
+        The probe worker performs blocking socket operations (connecting to
+        the SCPI server, querying *IDN?). Since QThread.quit() only works
+        for threads with an event loop, and our worker uses run() directly,
+        we use wait() with a timeout and then terminate() as fallback.
+
+        Timeout: 3 seconds (the probe typically completes in <2s if the
+        server is reachable, or fails fast if not).
+        """
+        if self._probe_worker is None:
+            return
+
+        if self._probe_worker.isRunning():
+            logger.info("Stopping device probe worker...")
+
+            # Disconnect signals to prevent stale callbacks after cleanup
+            try:
+                self._probe_worker.serial_detected.disconnect(self._on_serial_detected)
+                self._probe_worker.probe_failed.disconnect(self._on_probe_failed)
+            except (RuntimeError, TypeError):
+                pass  # Signals already disconnected or never connected
+
+            # Wait for the thread to finish (it's doing blocking I/O)
+            if not self._probe_worker.wait(3000):  # 3 second timeout
+                logger.warning("Probe worker did not stop in 3s -- terminating")
+                self._probe_worker.terminate()
+                self._probe_worker.wait(2000)  # Brief wait after terminate
+
+            logger.info("Device probe worker stopped")
+
+        self._probe_worker = None
+
+    def _stop_sweep_worker(self):
+        """
+        Stop the VNASweepWorker QThread and its backend adapter.
+
+        The sweep worker may be in the middle of:
+          - Starting the GUI subprocess (blocking ~5-10s)
+          - Running SCPI commands
+          - Waiting for streaming callbacks
+          - Saving xlsx output
+
+        Cleanup strategy:
+          1. If the worker has an adapter, call stop_lifecycle() to terminate
+             the GUI subprocess and close SCPI sockets immediately. This
+             unblocks any pending socket reads in the worker thread.
+          2. Wait for the thread to finish (the unblocked I/O should cause
+             an exception that falls through to the worker's finally block).
+          3. Force-terminate the thread if it does not stop within timeout.
+
+        Timeout: 8 seconds total (5s for adapter stop + 3s for thread wait).
+        """
+        if self._worker is None:
+            return
+
+        if self._worker.isRunning():
+            logger.info("Stopping sweep worker (collecting=%s)...", self._collecting)
+
+            # Disconnect signals to prevent stale callbacks
+            try:
+                self._worker.lifecycle_started.disconnect(self._on_lifecycle_started)
+                self._worker.sweep_completed.disconnect(self._on_sweep_completed)
+                self._worker.ifbw_completed.disconnect(self._on_ifbw_completed)
+                self._worker.all_completed.disconnect(self._on_all_completed)
+                self._worker.error_occurred.disconnect(self._on_error)
+            except (RuntimeError, TypeError):
+                pass  # Signals already disconnected
+
+            # Kill the adapter's subprocess to unblock pending I/O in the worker
+            if self._worker.adapter is not None:
+                logger.info("Stopping sweep adapter (GUI subprocess + SCPI)...")
+                try:
+                    self._worker.adapter.stop_lifecycle()
+                except Exception as e:
+                    logger.warning("Adapter stop_lifecycle error: %s", e)
+
+            # Wait for the worker thread to finish
+            if not self._worker.wait(5000):  # 5 second timeout
+                logger.warning("Sweep worker did not stop in 5s -- terminating")
+                self._worker.terminate()
+                self._worker.wait(2000)  # Brief wait after terminate
+
+            logger.info("Sweep worker stopped")
+
+        # Reset state
+        self._worker = None
+        self._collecting = False
