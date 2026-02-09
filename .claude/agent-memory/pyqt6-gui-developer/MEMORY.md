@@ -1,22 +1,43 @@
-# PyQt6 GUI Developer - Agent Memory
+# PyQt6/PySide6 GUI Developer - Agent Memory
 
-## Environment Setup
-- PyQt6 installed via `uv run pip install PyQt6` (v6.10.2, PyQt6-Qt6 v6.10.2, pyqt6-sip v13.11.0)
-- pyuic6 installed at `C:\Users\LENOVO X1E\AppData\Roaming\Python\Python310\Scripts` (not on PATH)
-- Offscreen rendering works: `os.environ['QT_QPA_PLATFORM'] = 'offscreen'`
+## Framework Decision: PySide6 (not PyQt6)
+- The project uses **PySide6** (auto-generated UI from pyside6-uic v6.10.2)
+- Both PySide6 6.10.2 and PyQt6 6.4.2 are installed; pyqtgraph auto-detects PySide6
+- Key API: `pyqtSignal` -> `Signal`, `pyqtSlot` -> `Slot` (from PySide6.QtCore)
+- No `uic.loadUi()` for PySide6; use compiled Ui_MainWindow via multiple inheritance
 
-## Project .ui Files
-- Custom GUI: `code/LibreVNA-dev/gui/LibreVNA_GUI_v_1_0.ui` (QMainWindow, 1280x720)
-  - Key widgets: startFrequencyLineEdit, stopFrequencyLineEdit, centerFrequencyLineEdit, spanFrequencyLineEdit, numberOfSweepLineEdit, levelLineEdit, pointsLineEdit, ifbwFrequencyLineEdit, pushButton ("Collect Data")
-  - Images dir: `code/LibreVNA-dev/gui/images/` (WTMH.png logo, placeholder-s11.png)
-  - Must `os.chdir()` to gui/ dir for relative image paths to resolve
-- LibreVNA-source has 60+ .ui files in `code/LibreVNA-source/Software/PC_Application/LibreVNA-GUI/`
+## PySide6 Signal Gotchas
+- `QLineEdit.textChanged` emits text arg; connecting to zero-arg Signal needs lambda
+- Pattern: `widget.textChanged.connect(lambda _text: self.config_changed.emit())`
+- PySide6 is stricter than PyQt6 about argument count mismatches
 
-## Loading .ui Files in PyQt6
-- Runtime: `uic.loadUi(ui_path, self)` -- widgets become `self.<objectName>` attributes
-- Compiled: `pyuic6 file.ui -o ui_file.py` then `from ui_file import Ui_MainWindow`
-- Runtime approach is better for rapid iteration; compiled is better for IDE auto-complete
-- Preview script created at: `code/LibreVNA-dev/gui/preview_ui.py`
+## Auto-generated Files (DO NOT edit except import fix)
+- `mvp/main_window.py` - pyside6-uic output; changed `import resources_rc` -> `from . import resources_rc`
+- `mvp/resources_rc.py` - pyside6-rcc output; imports `from PySide6 import QtCore`
+
+## MVP Architecture (Tested Working 2026-02-10)
+- Model: Pure Python, no Qt deps (`mvp/model.py`)
+- View: PySide6 + Ui_MainWindow multiple inheritance (`mvp/view.py`)
+- Presenter: Signal wiring, QThread worker (`mvp/presenter.py`)
+- Entry: `7_realtime_vna_plotter_mvp.py`
+- Auto-detects `.cal` and `sweep_config.yaml` in `gui/` on startup
+
+## Widget Name Mapping (.ui -> model)
+- start_frequency -> startFrequencyLineEdit
+- stop_frequency -> stopFrequencyLineEdit
+- center_frequency (computed) -> centerFrequencyLineEdit
+- span_frequency (computed) -> spanFrequencyLineEdit
+- num_points -> pointsLineEdit
+- stim_lvl_dbm -> levelLineEdit
+- num_sweeps -> numberOfSweepLineEdit
+- ifbw_values -> ifbwFrequencyLineEdit (comma-separated)
+- avg_count -> NO widget (default=1)
+
+## Running the GUI
+```
+cd code/LibreVNA-dev/gui
+uv run python 7_realtime_vna_plotter_mvp.py
+```
 
 ## Key Patterns
-- See [patterns.md](patterns.md) for detailed PyQt6 patterns (to be created as needed)
+- See [patterns.md](patterns.md) for detailed patterns (to be created as needed)

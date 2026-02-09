@@ -1,0 +1,7 @@
+<RCC>
+  <qresource prefix="ui">
+    <file>placeholder-s11.png</file>
+    <file>WTMH.ico</file>
+    <file>WTMH.png</file>
+  </qresource>
+</RCC>
