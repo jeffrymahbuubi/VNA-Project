@@ -2,8 +2,13 @@
 # Start Jupyter Server for MCP integration
 # This runs JupyterLab with collaboration enabled for jupyter-mcp-server
 
-cd /home/user/jeffrymahbuubi/1-GNN-Development
-source .venv/bin/activate
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Navigate to project root (two directories up from scripts/bash/)
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+cd "$PROJECT_ROOT"
+source code/.venv/bin/activate
 
 # Start JupyterLab with collaboration features enabled
 # Token must match the one in .mcp.json
