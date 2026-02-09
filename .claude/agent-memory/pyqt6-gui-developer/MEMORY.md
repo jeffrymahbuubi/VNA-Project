@@ -39,5 +39,19 @@ cd code/LibreVNA-dev/gui
 uv run python 7_realtime_vna_plotter_mvp.py
 ```
 
+## Threading: Device Detection on Startup
+- `DeviceProbeWorker(QThread)` runs `probe_device_serial()` from backend_wrapper.py
+- Checks if SCPI server running (port 19542), starts GUI subprocess if needed
+- Queries `*IDN?` (serial from 3rd comma field) and `:DEV:CONN?` (authoritative serial)
+- Emits `serial_detected` signal back to Presenter -> updates menu text
+- **Port conflict risk**: Probe's GUI subprocess and VNASweepWorker both use port 19542
+  - Presenter calls `_stop_probe_gui_process()` before starting sweep worker
+- Menu text format: `"{serial} (LibreVNA/USB)"` (e.g. "206830535532 (LibreVNA/USB)")
+
+## MVP Discipline: Presenter Should Not Touch Widgets Directly
+- View display methods should manage their own widget states (enabled/disabled/text)
+- Example: `set_device_serial()` both sets text AND re-enables the action
+- Presenter calls View methods only, never `self.view.some_widget.method()`
+
 ## Key Patterns
 - See [patterns.md](patterns.md) for detailed patterns (to be created as needed)
