@@ -102,7 +102,9 @@ load_calibration = _mod2.load_calibration
 # OS-dependent GUI binary path
 if platform.system() == "Windows":
     GUI_BINARY = os.path.normpath(
-        os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI", "release", "LibreVNA-GUI.exe")
+        os.path.join(
+            SCRIPT_DIR, "..", "tools", "LibreVNA-GUI", "release", "LibreVNA-GUI.exe"
+        )
     )
 else:
     GUI_BINARY = os.path.normpath(
@@ -219,7 +221,10 @@ class BaseVNASweep(ABC):
         _section("STARTING LibreVNA-GUI")
 
         env = os.environ.copy()
-        env["QT_QPA_PLATFORM"] = "offscreen"
+        # Only set offscreen platform on Linux/macOS where it's available
+        # Windows Qt builds only include qwindows.dll (requires desktop session)
+        if platform.system() != "Windows":
+            env["QT_QPA_PLATFORM"] = "offscreen"
 
         proc = subprocess.Popen(
             [GUI_BINARY, "--port", str(SCPI_PORT)],
@@ -332,7 +337,6 @@ class BaseVNASweep(ABC):
         """
         load_calibration(vna)
 
-
     def enable_streaming_server(self, vna):
         """
         Ensure the VNA Calibrated Data streaming server is enabled on port 19001.
@@ -375,8 +379,12 @@ class BaseVNASweep(ABC):
 
         # Enable streaming server via SCPI
         # DEV:PREF set returns CME bit even on success -- use check=False
-        print("  Sending         : DEV:PREF StreamingServers.VNACalibratedData.enabled true")
-        vna.cmd(":DEV:PREF StreamingServers.VNACalibratedData.enabled true", check=False)
+        print(
+            "  Sending         : DEV:PREF StreamingServers.VNACalibratedData.enabled true"
+        )
+        vna.cmd(
+            ":DEV:PREF StreamingServers.VNACalibratedData.enabled true", check=False
+        )
 
         print("  Sending         : DEV:APPLYPREFERENCES")
         vna.cmd(":DEV:APPLYPREFERENCES", check=False)
@@ -1098,23 +1106,25 @@ class ContinuousModeSweep(BaseVNASweep):
     def pre_loop_reset(self, vna):
         """
         Register streaming callback ONCE and prepare continuous mode.
-        
+
         The streaming server is guaranteed to be enabled by run() before
         this method is called, so we can directly connect without error
         handling.
         """
         _subsection("Continuous-mode streaming setup (one-time)")
-        
+
         # Create the persistent callback referencing the mutable state holder
         self._stream_callback = self._make_callback(self._state_holder)
-        
+
         # Stop any residual acquisition before connecting
         vna.cmd(":VNA:ACQ:STOP")
         print("  Pre-stop        : sent")
-        
+
         # Register the streaming callback (streaming server is guaranteed enabled)
         vna.add_live_callback(STREAMING_PORT, self._stream_callback)
-        print("  Streaming       : callback registered on port {}".format(STREAMING_PORT))
+        print(
+            "  Streaming       : callback registered on port {}".format(STREAMING_PORT)
+        )
 
     def post_loop_teardown(self, vna):
         """Stop acquisition, restore single mode, remove the streaming callback."""
