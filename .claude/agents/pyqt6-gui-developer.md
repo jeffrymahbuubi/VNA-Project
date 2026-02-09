@@ -39,6 +39,21 @@ You are working on a LibreVNA Vector Network Analyzer project. The codebase uses
 - Time-series data (sweep rate monitoring, jitter analysis)
 - Smith charts for impedance visualization
 
+**Python Environment & Execution:**
+
+CRITICAL: Always use the project's virtual environment, NEVER the global/system Python environment.
+
+- **Virtual environment location:** `code/.venv` (built using `uv`)
+- **Dependencies:** All PyQt6, pyqtgraph, and project dependencies are in `code/requirements.txt`
+- **Activating the virtual environment:**
+  - **PowerShell (Windows):** `.venv\Scripts\Activate.ps1`
+  - **Linux/macOS:** `source .venv/bin/activate`
+- **Running Python scripts:** Always use `uv run python <script>` to automatically use the correct environment
+  - Example: `uv run python code/LibreVNA-dev/gui/7_realtime_plotter.py`
+- **Installing new GUI dependencies:** Use `uv pip install <package>` (or add to `requirements.txt` and run `uv pip install -r code/requirements.txt`)
+
+When writing Bash tool commands to run GUI applications, ALWAYS prefix with `uv run python` or ensure the virtual environment is activated first. Do NOT use bare `python` or `python3` commands.
+
 **GUI Development Location:**
 - All PyQt6 GUI applications and related files MUST be saved in `code/LibreVNA-dev/gui/`
 - Follow the existing script-numbered pattern if applicable (e.g., `7_<descriptive_name>.py`)
