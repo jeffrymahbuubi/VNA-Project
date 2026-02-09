@@ -1,8 +1,12 @@
 """
 Presenter layer for LibreVNA GUI (MVP architecture).
 
-Mediates between Model and View, handles state machine, and manages worker thread.
-All backend operations (SCPI, sweeps) run in VNASweepWorker to keep GUI responsive.
+Mediates between Model and View, handles state machine, and manages worker threads.
+All backend operations (SCPI, sweeps) run in background QThreads to keep GUI responsive.
+
+Worker threads:
+  - DeviceProbeWorker: Lightweight startup device detection (queries serial)
+  - VNASweepWorker: Full sweep collection lifecycle (GUI + cal + sweeps + xlsx)
 """
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -14,7 +18,39 @@ from typing import Optional
 
 from .model import VNADataModel, SweepConfig
 from .view import VNAMainWindow
-from .backend_wrapper import GUIVNASweepAdapter
+from .backend_wrapper import GUIVNASweepAdapter, probe_device_serial
+
+
+class DeviceProbeWorker(QThread):
+    """
+    Lightweight background worker for startup device detection.
+
+    Connects to the LibreVNA-GUI SCPI server (starting the GUI subprocess
+    if needed), queries the device serial number via *IDN? and DEV:CONN?,
+    and emits the result back to the Presenter on the GUI thread.
+
+    This runs as a separate thread so the GUI remains responsive during
+    the potentially slow startup sequence (up to 30 seconds if the GUI
+    subprocess needs to be launched).
+    """
+
+    # Signals emitted TO presenter (received on GUI thread via Qt signal/slot)
+    serial_detected = Signal(dict)  # {'serial': str, 'idn': str, 'gui_process': ...}
+    probe_failed = Signal(str)      # error message
+
+    def run(self):
+        """
+        Execute device probe in background thread.
+
+        Calls probe_device_serial() from the backend wrapper, which handles
+        the full detection sequence: check SCPI server -> start GUI if needed
+        -> connect -> query *IDN? -> query DEV:CONN?.
+        """
+        try:
+            device_info = probe_device_serial()
+            self.serial_detected.emit(device_info)
+        except Exception as e:
+            self.probe_failed.emit(str(e))
 
 
 class VNASweepWorker(QThread):
@@ -136,6 +172,10 @@ class VNAPresenter(QObject):
         self._worker: Optional[VNASweepWorker] = None
         self._collecting = False
 
+        # Device probe worker state
+        self._probe_worker: Optional[DeviceProbeWorker] = None
+        self._gui_process = None  # Subprocess handle if GUI was started by probe
+
         # Current collection state
         self._current_ifbw_index = 0
         self._total_ifbw_count = 0
@@ -151,6 +191,7 @@ class VNAPresenter(QObject):
         self.view.collect_data_requested.connect(self._on_collect_data_requested)
         self.view.load_calibration_requested.connect(self._on_load_calibration_requested)
         self.view.load_config_requested.connect(self._on_load_config_requested)
+        self.view.connect_device_requested.connect(self._on_connect_device_requested)
         self.view.config_changed.connect(self._on_config_changed)
 
     # -----------------------------------------------------------------------
@@ -208,8 +249,130 @@ class VNAPresenter(QObject):
             self.view.populate_sweep_config(self.model.config.to_dict())
 
         # Update button state after auto-detection
-        # Device is NOT connected yet (worker will connect), so button stays disabled
+        # Device is NOT connected yet (probe worker will detect), so button stays disabled
         self._update_collect_button_state()
+
+        # Launch device probe in background thread
+        self._start_device_probe()
+
+    # -----------------------------------------------------------------------
+    # Device Probe (Startup Detection)
+    # -----------------------------------------------------------------------
+
+    def _start_device_probe(self):
+        """
+        Launch a background DeviceProbeWorker to detect the connected device.
+
+        The worker connects to the LibreVNA-GUI SCPI server (starting the GUI
+        subprocess if needed), queries *IDN? and DEV:CONN?, and emits the
+        device serial number back to the Presenter via Qt signal.
+
+        Safe to call multiple times -- a new probe will not start if one is
+        already running.
+        """
+        if self._probe_worker is not None and self._probe_worker.isRunning():
+            return  # Probe already in progress
+
+        # Show searching state in menu
+        self.view.set_device_searching()
+        self.view.show_status_message("Detecting device...", timeout=0)
+
+        # Create and start probe worker
+        self._probe_worker = DeviceProbeWorker()
+        self._probe_worker.serial_detected.connect(self._on_serial_detected)
+        self._probe_worker.probe_failed.connect(self._on_probe_failed)
+        self._probe_worker.start()
+
+    @Slot(dict)
+    def _on_serial_detected(self, device_info: dict):
+        """
+        Handle successful device detection from probe worker.
+
+        Updates the Model with device info and the View menu item with
+        the serial number in the format "206830535532 (LibreVNA/USB)".
+
+        Args:
+            device_info: Dictionary from probe_device_serial() with keys:
+                'serial', 'idn', 'gui_started', 'gui_process'
+        """
+        serial = device_info.get('serial', 'Unknown')
+        idn = device_info.get('idn', '')
+
+        # Update model
+        self.model.device.serial_number = serial
+        self.model.device.idn_string = idn
+        self.model.device.connected = True
+
+        # Store GUI subprocess handle if the probe started it
+        if device_info.get('gui_process') is not None:
+            self._gui_process = device_info['gui_process']
+
+        # Update view (set_device_serial also re-enables the menu action)
+        self.view.set_device_serial(serial)
+        self.view.show_status_message(
+            f"Device detected: {serial}", timeout=5000
+        )
+
+        # Update button state (device is now known)
+        self._update_collect_button_state()
+
+    @Slot(str)
+    def _on_probe_failed(self, error_message: str):
+        """
+        Handle failed device detection from probe worker.
+
+        Shows "Not found" in the menu and logs the error to the status bar.
+        The user can retry by clicking the menu action.
+
+        Args:
+            error_message: Description of why the probe failed
+        """
+        # Update model
+        self.model.device.connected = False
+        self.model.device.serial_number = ""
+
+        # Update view
+        self.view.set_device_not_found()
+        self.view.show_status_message(
+            f"Device detection failed: {error_message}", timeout=10000
+        )
+
+        # Update button state
+        self._update_collect_button_state()
+
+    @Slot()
+    def _on_connect_device_requested(self):
+        """
+        Handle Device > Connect to menu action click.
+
+        Re-launches the device probe if not currently running.
+        """
+        if self._collecting:
+            self.view.show_status_message(
+                "Cannot probe device during data collection", timeout=3000
+            )
+            return
+
+        self._start_device_probe()
+
+    def _stop_probe_gui_process(self):
+        """
+        Terminate the GUI subprocess started by the device probe (if any).
+
+        Called before starting a VNASweepWorker to avoid port conflicts,
+        since both the probe and the sweep worker use the same SCPI port.
+        """
+        if self._gui_process is not None:
+            try:
+                self._gui_process.terminate()
+                self._gui_process.wait(timeout=5)
+            except Exception:
+                try:
+                    self._gui_process.kill()
+                    self._gui_process.wait()
+                except Exception:
+                    pass
+            self._gui_process = None
 
     # -----------------------------------------------------------------------
     # User Actions
@@ -220,6 +383,11 @@ class VNAPresenter(QObject):
         """Handle 'Collect Data' button click."""
         if self._collecting:
             return  # Already running
+
+        # Stop any GUI subprocess started by the device probe to avoid port
+        # conflicts -- the VNASweepWorker starts its own GUI subprocess on
+        # the same SCPI port (19542).
+        self._stop_probe_gui_process()
 
         # Read config from widgets
         config_dict = self.view.read_sweep_config()

@@ -3,10 +3,13 @@ Backend adapter for GUI integration with script 6 (BaseVNASweep).
 
 This module wraps the monolithic run() method from ContinuousModeSweep into
 discrete lifecycle steps suitable for GUI threading:
-  - start_lifecycle() → start GUI, connect, load calibration
-  - run_single_ifbw_sweep() → configure + run sweeps for ONE IFBW value
-  - save_results() → write xlsx workbook
-  - stop_lifecycle() → terminate GUI subprocess
+  - start_lifecycle() -> start GUI, connect, load calibration
+  - run_single_ifbw_sweep() -> configure + run sweeps for ONE IFBW value
+  - save_results() -> write xlsx workbook
+  - stop_lifecycle() -> terminate GUI subprocess
+
+Also provides a lightweight probe_device_serial() function for startup device
+detection without requiring the full sweep infrastructure.
 
 Threading contract: All methods except callbacks are called from QThread worker.
 Callbacks are passed by caller and should emit Qt signals for thread-safe GUI updates.
@@ -14,6 +17,10 @@ Callbacks are passed by caller and should emit Qt signals for thread-safe GUI up
 
 import sys
 import os
+import socket
+import time
+import subprocess
+import platform
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 import numpy as np
@@ -23,11 +30,171 @@ SCRIPT_DIR = Path(__file__).parent.parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from importlib import import_module
+from libreVNA import libreVNA
 
 # Dynamically import script 6 to avoid naming conflicts (starts with digit)
 script6_module = import_module("6_librevna_gui_mode_sweep_test")
 ContinuousModeSweep = script6_module.ContinuousModeSweep
 SweepResult = script6_module.SweepResult
+
+# SCPI connection constants (matching script 6)
+SCPI_HOST = "localhost"
+SCPI_PORT = 19542
+GUI_START_TIMEOUT_S = 30.0
+
+# OS-dependent GUI binary path
+if platform.system() == "Windows":
+    GUI_BINARY = str(Path(SCRIPT_DIR) / ".." / "tools" / "LibreVNA-GUI" / "release" / "LibreVNA-GUI.exe")
+else:
+    GUI_BINARY = str(Path(SCRIPT_DIR) / ".." / "tools" / "LibreVNA-GUI")
+GUI_BINARY = os.path.normpath(GUI_BINARY)
+
+
+def _is_scpi_server_running(host: str = SCPI_HOST, port: int = SCPI_PORT,
+                            timeout: float = 1.0) -> bool:
+    """
+    Check if the LibreVNA-GUI SCPI server is accepting connections.
+
+    Args:
+        host: SCPI server hostname
+        port: SCPI server port number
+        timeout: Connection attempt timeout in seconds
+
+    Returns:
+        True if a TCP connection to the SCPI port succeeds
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((host, port))
+        s.close()
+        return True
+    except (ConnectionRefusedError, OSError, socket.timeout):
+        try:
+            s.close()
+        except Exception:
+            pass
+        return False
+
+
+def _start_gui_subprocess() -> subprocess.Popen:
+    """
+    Launch LibreVNA-GUI in headless/no-gui mode and wait for the SCPI
+    server to become available on SCPI_PORT.
+
+    Returns:
+        subprocess.Popen handle for the GUI process
+
+    Raises:
+        RuntimeError: If the GUI does not start within GUI_START_TIMEOUT_S
+        FileNotFoundError: If the GUI binary is not found
+    """
+    if not os.path.exists(GUI_BINARY):
+        raise FileNotFoundError(
+            f"LibreVNA-GUI binary not found at: {GUI_BINARY}"
+        )
+
+    env = os.environ.copy()
+    if platform.system() != "Windows":
+        env["QT_QPA_PLATFORM"] = "offscreen"
+
+    proc = subprocess.Popen(
+        [GUI_BINARY, "--port", str(SCPI_PORT), "--no-gui"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Poll for SCPI server readiness
+    deadline = time.time() + GUI_START_TIMEOUT_S
+    while True:
+        if _is_scpi_server_running():
+            return proc
+        if time.time() > deadline:
+            proc.terminate()
+            proc.wait()
+            raise RuntimeError(
+                f"LibreVNA-GUI did not open SCPI server on port {SCPI_PORT} "
+                f"within {GUI_START_TIMEOUT_S:.0f} s"
+            )
+        time.sleep(0.25)
+
+
+def probe_device_serial() -> Dict[str, str]:
+    """
+    Lightweight device probe for startup detection.
+
+    Attempts to connect to the LibreVNA-GUI SCPI server. If the server is
+    not running, starts the GUI subprocess first. Then queries the device
+    identity (*IDN?) and connected device serial (DEV:CONN?) to retrieve
+    the hardware serial number.
+
+    This function is designed to be called from a background QThread so it
+    does not block the GUI event loop.
+
+    Returns:
+        Dictionary with device info:
+            'serial': Hardware serial number (e.g. '206830535532')
+            'idn': Full *IDN? response string
+            'gui_started': True if this function started the GUI subprocess
+            'gui_process': subprocess.Popen handle if GUI was started, else None
+
+    Raises:
+        RuntimeError: If connection fails or no device is connected
+        FileNotFoundError: If GUI binary not found (when auto-starting)
+    """
+    gui_process = None
+    gui_started = False
+
+    # Step 1: Check if SCPI server is already running
+    if not _is_scpi_server_running():
+        # Need to start the GUI subprocess
+        gui_process = _start_gui_subprocess()
+        gui_started = True
+
+    # Step 2: Connect to SCPI server
+    try:
+        vna = libreVNA(host=SCPI_HOST, port=SCPI_PORT)
+    except Exception as exc:
+        if gui_process:
+            gui_process.terminate()
+            gui_process.wait()
+        raise RuntimeError(
+            f"Could not connect to LibreVNA-GUI SCPI server at "
+            f"{SCPI_HOST}:{SCPI_PORT}: {exc}"
+        )
+
+    # Step 3: Query device identity
+    try:
+        idn_raw = vna.query("*IDN?")
+        parts = [p.strip() for p in idn_raw.split(",")]
+        idn_serial = parts[2] if len(parts) > 2 else "Unknown"
+    except Exception as exc:
+        if gui_process:
+            gui_process.terminate()
+            gui_process.wait()
+        raise RuntimeError(f"*IDN? query failed: {exc}")
+
+    # Step 4: Query connected device serial (more authoritative)
+    try:
+        dev_serial = vna.query(":DEV:CONN?")
+        dev_serial = dev_serial.strip()
+        if dev_serial == "Not connected":
+            raise RuntimeError(
+                "LibreVNA-GUI is running but no hardware device is connected."
+            )
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        # Fall back to *IDN? serial if DEV:CONN? fails
+        dev_serial = idn_serial
+
+    return {
+        'serial': dev_serial,
+        'idn': idn_raw,
+        'gui_started': gui_started,
+        'gui_process': gui_process,
+    }
 
 
 class GUIVNASweepAdapter:

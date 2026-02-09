@@ -32,6 +32,7 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
     collect_data_requested = Signal()
     load_calibration_requested = Signal()
     load_config_requested = Signal()
+    connect_device_requested = Signal()  # Emitted when user clicks Device > Connect to > serial action
     config_changed = Signal()  # Emitted when user edits any config widget
 
     def __init__(self):
@@ -111,7 +112,7 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
                            numberOfSweepLineEdit
           Acquisitions box: levelLineEdit, pointsLineEdit, ifbwFrequencyLineEdit
           Actions:         actionLoad (.cal), actionLoad_yaml_config,
-                           actionSerial_LibreVNA_USB
+                           actionSerial_LibreVNA_USB (device connect)
           Button:          pushButton (Collect Data)
         """
         # Collect data button
@@ -123,6 +124,9 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         )
         self.actionLoad_yaml_config.triggered.connect(
             self.load_config_requested.emit
+        )
+        self.actionSerial_LibreVNA_USB.triggered.connect(
+            self.connect_device_requested.emit
         )
 
         # Config widget changes (for validation feedback)
@@ -313,10 +317,34 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         """
         Update device serial display in the Device > Connect to menu.
 
+        Displays the serial number followed by the device type, matching
+        the LibreVNA-GUI convention: "206830535532 (LibreVNA/USB)".
+        Re-enables the action (it was disabled during search).
+
         Args:
-            serial: Device serial number string
+            serial: Device serial number string (e.g. "206830535532")
         """
-        self.actionSerial_LibreVNA_USB.setText(f"Serial: {serial}")
+        self.actionSerial_LibreVNA_USB.setText(f"{serial} (LibreVNA/USB)")
+        self.actionSerial_LibreVNA_USB.setEnabled(True)
+
+    def set_device_searching(self):
+        """
+        Show searching state in the Device > Connect to menu.
+
+        Displayed while the background device probe thread is running.
+        """
+        self.actionSerial_LibreVNA_USB.setText("Searching... (LibreVNA/USB)")
+        self.actionSerial_LibreVNA_USB.setEnabled(False)
+
+    def set_device_not_found(self):
+        """
+        Show not-found state in the Device > Connect to menu.
+
+        Displayed when the device probe fails (no device connected, GUI
+        not running, or SCPI connection refused).
+        """
+        self.actionSerial_LibreVNA_USB.setText("Not found (LibreVNA/USB)")
+        self.actionSerial_LibreVNA_USB.setEnabled(True)
 
     def set_calibration_status(self, loaded: bool, file_name: str = ""):
         """
