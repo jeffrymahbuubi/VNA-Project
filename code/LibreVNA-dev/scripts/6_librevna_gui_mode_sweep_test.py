@@ -50,9 +50,9 @@ BOTH MODES:
 
 Usage
 -----
-    uv run python 6_librevna_gui_mode_sweep_test.py                  # single, default config
-    uv run python 6_librevna_gui_mode_sweep_test.py --mode continuous
-    uv run python 6_librevna_gui_mode_sweep_test.py --config /path/to/other.yaml --no-save
+    uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal
+    uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal --mode continuous
+    uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal --config /path/to/other.yaml --no-save
 """
 
 import sys
@@ -102,10 +102,8 @@ else:
     GUI_BINARY = os.path.normpath(
         os.path.join(SCRIPT_DIR, "..", "tools", "LibreVNA-GUI")
     )
-# CAL_FILE_PATH = os.path.normpath(
-#     os.path.join(SCRIPT_DIR, "..", "calibration", "SOLT_1_2_43G-2_45G_300pt.cal")
-# )
-CAL_FILE_PATH = os.path.normpath("SOLT_1_2_43G-2_45G_300pt.cal")
+# CAL_FILE_PATH removed -- now supplied via the mandatory --cal-file CLI argument
+# and stored as self.cal_file_path on BaseVNASweep instances.
 DATA_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "data"))
 
 SCPI_HOST = "localhost"
@@ -168,16 +166,18 @@ class BaseVNASweep(ABC):
     logic (configure + run) is left to the subclasses.
     """
 
-    def __init__(self, config_path, mode, summary=True, save_data=True):
+    def __init__(self, config_path, cal_file_path, mode, summary=True, save_data=True):
         """
         Parameters
         ----------
-        config_path : str   -- absolute path to the YAML config file.
-        mode        : str   -- "single" or "continuous".
-        summary     : bool  -- if True, print the PrettyTable at the end.
-        save_data   : bool  -- if True, write the xlsx workbook.
+        config_path   : str   -- absolute path to the YAML config file.
+        cal_file_path : str   -- path to the calibration file (.cal).
+        mode          : str   -- "single" or "continuous".
+        summary       : bool  -- if True, print the PrettyTable at the end.
+        save_data     : bool  -- if True, write the xlsx workbook.
         """
         self.mode = mode
+        self.cal_file_path = os.path.normpath(cal_file_path)
         self.summary = summary
         self.save_data = save_data
 
@@ -339,6 +339,9 @@ class BaseVNASweep(ABC):
 
         Both are queries -- vna.query() must be used, not vna.cmd().
 
+        The calibration file path is taken from self.cal_file_path, which
+        is set via the --cal-file CLI argument and normalised in __init__.
+
         Parameters
         ----------
         vna : libreVNA
@@ -354,14 +357,14 @@ class BaseVNASweep(ABC):
         _section("CALIBRATION LOADING")
 
         # -- Resolve and validate the path ---------------------------------------
-        cal_abs_path = os.path.normpath(CAL_FILE_PATH)
+        cal_abs_path = os.path.normpath(self.cal_file_path)
         print("  Cal file path   : {}".format(cal_abs_path))
 
         if not os.path.isfile(cal_abs_path):
             print("  [FAIL] Calibration file not found on disk:")
             print("         {}".format(cal_abs_path))
-            print("         Verify the file exists and the relative path in")
-            print("         CAL_FILE_PATH is correct, then re-run.")
+            print("         Verify the file exists and the path passed via")
+            print("         --cal-file is correct, then re-run.")
             sys.exit(1)
 
         print("  File exists     : YES")
@@ -1342,14 +1345,18 @@ class VNAGUIModeSweepTest(SingleModeSweep, ContinuousModeSweep):
     run_sweeps() route to the appropriate parent method based on self.mode.
     """
 
-    def __init__(self, config_path, mode="single", summary=True, save_data=True):
+    def __init__(self, config_path, cal_file_path, mode="single", summary=True, save_data=True):
         if mode not in ("single", "continuous"):
             raise ValueError(
                 "mode must be 'single' or 'continuous', got '{}'".format(mode)
             )
         # BaseVNASweep.__init__ is called once via super() thanks to MRO.
         super().__init__(
-            config_path=config_path, mode=mode, summary=summary, save_data=save_data
+            config_path=config_path,
+            cal_file_path=cal_file_path,
+            mode=mode,
+            summary=summary,
+            save_data=save_data,
         )
 
     def configure_sweep(self, vna, ifbw_hz):
@@ -1393,6 +1400,11 @@ if __name__ == "__main__":
         help="Path to YAML config (default: sweep_config.yaml in scripts/)",
     )
     parser.add_argument(
+        "--cal-file",
+        required=True,
+        help="Path to calibration file (.cal). Required.",
+    )
+    parser.add_argument(
         "--mode",
         choices=["single", "continuous"],
         default="single",
@@ -1412,6 +1424,7 @@ if __name__ == "__main__":
 
     test = VNAGUIModeSweepTest(
         config_path=args.config,
+        cal_file_path=args.cal_file,
         mode=args.mode,
         summary=not args.no_summary,
         save_data=not args.no_save,
