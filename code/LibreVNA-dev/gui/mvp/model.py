@@ -78,7 +78,16 @@ class SweepConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "SweepConfig":
-        """Create from dictionary (YAML config)."""
+        """Create from dictionary (YAML config).
+
+        Note: start_frequency, stop_frequency, and num_points are NOT
+        read from YAML. They are always populated from the .cal file by
+        calling update_from_cal_file() after instantiation. The zero
+        placeholders ensure is_valid() returns False until the cal file
+        has been applied, enforcing the architectural invariant that the
+        calibration file is the single source of truth for sweep range
+        and point count.
+        """
         config = data.get("configurations", {})
         target = data.get("target", {})
 
@@ -88,14 +97,40 @@ class SweepConfig:
             ifbw_values = [ifbw_values]
 
         return cls(
-            start_frequency=config.get("start_frequency", 200000000),
-            stop_frequency=config.get("stop_frequency", 250000000),
-            num_points=config.get("num_points", 801),
+            start_frequency=0,  # Populated by update_from_cal_file()
+            stop_frequency=0,   # Populated by update_from_cal_file()
+            num_points=0,       # Populated by update_from_cal_file()
             stim_lvl_dbm=config.get("stim_lvl_dbm", -10),
             avg_count=config.get("avg_count", 1),
             num_sweeps=config.get("num_sweeps", 30),
             ifbw_values=ifbw_values,
         )
+
+    def update_from_cal_file(self, cal_file_path: str) -> None:
+        """Populate start_frequency, stop_frequency, num_points from a .cal file.
+
+        The calibration file is the single source of truth for the sweep
+        frequency range and point count.  This method parses the JSON .cal
+        file and updates the corresponding fields in-place.
+
+        Parameters
+        ----------
+        cal_file_path : str
+            Absolute or relative path to the .cal file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the file does not exist.
+        ValueError
+            If the file is malformed or missing required data.
+        """
+        from .vna_backend import BaseVNASweep
+
+        cal_params = BaseVNASweep.parse_calibration_file(cal_file_path)
+        self.start_frequency = cal_params["start_frequency"]
+        self.stop_frequency = cal_params["stop_frequency"]
+        self.num_points = cal_params["num_points"]
 
 
 @dataclass
