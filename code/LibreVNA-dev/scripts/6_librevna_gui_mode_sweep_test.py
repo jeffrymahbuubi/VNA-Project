@@ -4,9 +4,11 @@
 -----------------------------------
 Unified single-sweep / continuous-sweep benchmark for LibreVNA.
 
-Reads sweep parameters from sweep_config.yaml, runs the requested mode
-(single or continuous) across every IFBW value listed in the config, and
-produces both a console PrettyTable summary and a multi-sheet xlsx workbook.
+Reads sweep frequency range and point count from the calibration file
+(.cal, JSON format) and remaining parameters (stimulus level, averaging,
+IFBW values) from sweep_config.yaml.  Runs the requested mode (single or
+continuous) across every IFBW value listed in the config, and produces
+both a console PrettyTable summary and a multi-sheet xlsx workbook.
 
 Class hierarchy
 ---------------
@@ -60,6 +62,7 @@ import os
 import platform
 import math
 import time
+import json
 import socket
 import subprocess
 import threading
@@ -166,6 +169,117 @@ class BaseVNASweep(ABC):
     logic (configure + run) is left to the subclasses.
     """
 
+    @staticmethod
+    def parse_calibration_file(cal_file_path):
+        """
+        Parse a LibreVNA .cal file (JSON) and extract sweep parameters.
+
+        The calibration file contains a 'measurements' array where each
+        measurement has 'data.points' -- an array of {frequency, real, imag}
+        objects.  The start frequency is the first point's frequency, the
+        stop frequency is the last point's frequency, and num_points is
+        the length of the points array.
+
+        All measurements within a single .cal file share the same frequency
+        grid, so only the first measurement is inspected.
+
+        Parameters
+        ----------
+        cal_file_path : str
+            Absolute or relative path to the .cal file.
+
+        Returns
+        -------
+        dict
+            Keys: 'start_frequency' (int, Hz),
+                  'stop_frequency'  (int, Hz),
+                  'num_points'      (int).
+
+        Raises
+        ------
+        FileNotFoundError
+            If the file does not exist on disk.
+        ValueError
+            If the file is not valid JSON, is missing required keys,
+            or contains no measurement data.
+        """
+        cal_abs = os.path.normpath(cal_file_path)
+
+        if not os.path.isfile(cal_abs):
+            raise FileNotFoundError(
+                "Calibration file not found: {}".format(cal_abs)
+            )
+
+        try:
+            with open(cal_abs, "r") as fh:
+                cal_data = json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "Calibration file is not valid JSON: {}: {}".format(cal_abs, exc)
+            )
+
+        # -- Validate required structure ----------------------------------------
+        if "measurements" not in cal_data:
+            raise ValueError(
+                "Calibration file missing 'measurements' key: {}".format(cal_abs)
+            )
+
+        measurements = cal_data["measurements"]
+        if not isinstance(measurements, list) or len(measurements) == 0:
+            raise ValueError(
+                "Calibration file has no measurements: {}".format(cal_abs)
+            )
+
+        first_meas = measurements[0]
+
+        if "data" not in first_meas:
+            raise ValueError(
+                "First measurement missing 'data' key: {}".format(cal_abs)
+            )
+
+        if "points" not in first_meas["data"]:
+            raise ValueError(
+                "First measurement missing 'data.points' key: {}".format(cal_abs)
+            )
+
+        points = first_meas["data"]["points"]
+        if not isinstance(points, list) or len(points) == 0:
+            raise ValueError(
+                "First measurement has no calibration points: {}".format(cal_abs)
+            )
+
+        # -- Extract frequency range and point count ----------------------------
+        first_freq = points[0].get("frequency")
+        last_freq = points[-1].get("frequency")
+
+        if first_freq is None or last_freq is None:
+            raise ValueError(
+                "Calibration points missing 'frequency' field: {}".format(cal_abs)
+            )
+
+        start_frequency = int(round(first_freq))
+        stop_frequency = int(round(last_freq))
+        num_points = len(points)
+
+        if start_frequency >= stop_frequency:
+            raise ValueError(
+                "Invalid frequency range in calibration file: start={} Hz >= "
+                "stop={} Hz: {}".format(start_frequency, stop_frequency, cal_abs)
+            )
+
+        if num_points < 2:
+            raise ValueError(
+                "Calibration file has fewer than 2 points ({}): {}".format(
+                    num_points, cal_abs
+                )
+            )
+
+        return {
+            "start_frequency": start_frequency,
+            "stop_frequency": stop_frequency,
+            "num_points": num_points,
+        }
+
     def __init__(self, config_path, cal_file_path, mode, summary=True, save_data=True):
         """
         Parameters
@@ -181,16 +295,22 @@ class BaseVNASweep(ABC):
         self.summary = summary
         self.save_data = save_data
 
-        # -- Load YAML config --------------------------------------------------
+        # -- Extract frequency range and num_points from the .cal file ---------
+        # The calibration file is the single source of truth for sweep
+        # boundaries.  This prevents misconfiguration where the YAML config
+        # specifies a different range than what the calibration covers.
+        cal_params = self.parse_calibration_file(self.cal_file_path)
+        self.start_freq_hz = cal_params["start_frequency"]
+        self.stop_freq_hz = cal_params["stop_frequency"]
+        self.num_points = cal_params["num_points"]
+
+        # -- Load remaining parameters from YAML config ------------------------
         with open(config_path, "r") as fh:
             raw = yaml.safe_load(fh)
 
         cfg = raw["configurations"]
         tgt = raw["target"]
 
-        self.start_freq_hz = int(cfg["start_frequency"])
-        self.stop_freq_hz = int(cfg["stop_frequency"])
-        self.num_points = int(cfg["num_points"])
         self.stim_lvl_dbm = int(cfg["stim_lvl_dbm"])
         self.avg_count = int(cfg["avg_count"])
         self.num_sweeps = int(cfg["num_sweeps"])
