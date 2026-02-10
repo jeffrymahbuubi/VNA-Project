@@ -1,14 +1,12 @@
 configurations:
-  start_frequency: 2430000000      # Hz (2.430 GHz)
-  stop_frequency: 2450000000       # Hz (2.450 GHz)
-  num_points: 300
+  start_frequency: 200000000       # Hz (200 MHz)
+  stop_frequency: 250000000        # Hz (250 MHz)
+  num_points: 801
   stim_lvl_dbm: -10
   avg_count: 1
   num_sweeps: 30                   # sweeps per IFBW value
 
 target:
   ifbw_values:                     # single int OR list of ints in Hz
-    - 150000
-    - 145000
-    - 125000
+    - 50000
 
