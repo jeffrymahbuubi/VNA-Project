@@ -1,7 +1,10 @@
+# Sweep configuration for script 6 (6_librevna_gui_mode_sweep_test.py)
+#
+# Frequency range (start_frequency, stop_frequency) and num_points are
+# extracted from the calibration file (.cal) passed via --cal-file.
+# This ensures the sweep always matches the calibration boundaries.
+
 configurations:
-  start_frequency: 2430000000      # Hz (2.430 GHz)
-  stop_frequency: 2450000000       # Hz (2.450 GHz)
-  num_points: 300
   stim_lvl_dbm: -10
   avg_count: 1
   num_sweeps: 30                   # sweeps per IFBW value
@@ -11,4 +14,3 @@ target:
     - 150000
     - 145000
     - 125000
-
