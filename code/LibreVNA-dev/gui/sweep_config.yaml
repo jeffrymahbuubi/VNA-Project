@@ -1,7 +1,10 @@
+# Sweep configuration for the LibreVNA GUI application
+#
+# Frequency range (start_frequency, stop_frequency) and num_points are
+# extracted from the calibration file (.cal).  This ensures the sweep
+# always matches the calibration boundaries.
+
 configurations:
-  start_frequency: 200000000       # Hz (200 MHz)
-  stop_frequency: 250000000        # Hz (250 MHz)
-  num_points: 801
   stim_lvl_dbm: -10
   avg_count: 1
   num_sweeps: 30                   # sweeps per IFBW value
@@ -9,4 +12,3 @@ configurations:
 target:
   ifbw_values:                     # single int OR list of ints in Hz
     - 50000
-
