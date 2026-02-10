@@ -25,7 +25,7 @@
 - Entry: `7_realtime_vna_plotter_mvp.py`
 - Auto-detects `.cal` in `gui/mvp/` and `sweep_config.yaml` in `gui/` on startup
 
-## Calibration File Path Strategy (Updated 2026-02-10)
+## Calibration File Path Strategy (Updated 2026-02-11)
 - `.cal` files live in `gui/mvp/` (colocated with backend scripts)
 - **Auto-detection:** `presenter._on_startup()` uses `mvp_dir.glob("*.cal")` sorted by mtime (most recent first)
   - Previously hardcoded `SOLT_1_2_43G-2_45G_300pt.cal` -- caused new cal files to be ignored
@@ -35,7 +35,9 @@
   - Uses `shutil.copy2()` if selected file is NOT already in gui/mvp/
   - Always stores just the filename (never full path) in model
 - Presenter stores just the FILENAME (not full path) in model.calibration.file_path
-- `vna_backend.py` `load_calibration()` resolves filename relative to `_MODULE_DIR` for existence check
+- **Both** `parse_calibration_file()` and `load_calibration()` in `vna_backend.py` resolve relative paths against `_MODULE_DIR`
+  - Fixed 2026-02-11: `parse_calibration_file()` previously did only `os.path.normpath()` (no `_MODULE_DIR` fallback)
+  - Now uses identical `os.path.isabs()` / `os.path.join(_MODULE_DIR, ...)` pattern as `load_calibration()`
 - SCPI `:VNA:CAL:LOAD?` receives ONLY the filename (e.g. `SOLT_1_200M-250M_801pt.cal`)
 - GUI subprocess CWD is set to `_MODULE_DIR` (`gui/mvp/`) so filename resolves correctly
 - **Why:** Full Windows paths with spaces (e.g. `D:\AUNUUN JEFFRY MAHBUUBI\...`) break SCPI parsing
