@@ -13,6 +13,7 @@ import numpy as np
 @dataclass
 class DeviceInfo:
     """VNA device connection state."""
+
     serial_number: str = ""
     connected: bool = False
     idn_string: str = ""
@@ -21,6 +22,7 @@ class DeviceInfo:
 @dataclass
 class CalibrationState:
     """Calibration file state."""
+
     file_path: str = ""
     loaded: bool = False
     active_cal_type: str = "SOLT"  # Default calibration type
@@ -29,9 +31,10 @@ class CalibrationState:
 @dataclass
 class SweepConfig:
     """VNA sweep configuration parameters."""
-    start_frequency: int = 2430000000  # Hz (2.43 GHz)
-    stop_frequency: int = 2450000000   # Hz (2.45 GHz)
-    num_points: int = 300
+
+    start_frequency: int = 200000000  # Hz
+    stop_frequency: int = 250000000  # Hz
+    num_points: int = 801
     stim_lvl_dbm: int = -10
     avg_count: int = 1
     num_sweeps: int = 30
@@ -64,33 +67,33 @@ class SweepConfig:
     def to_dict(self) -> dict:
         """Convert to dictionary for backend consumption."""
         return {
-            'start_frequency': self.start_frequency,
-            'stop_frequency': self.stop_frequency,
-            'num_points': self.num_points,
-            'stim_lvl_dbm': self.stim_lvl_dbm,
-            'avg_count': self.avg_count,
-            'num_sweeps': self.num_sweeps,
-            'ifbw_values': self.ifbw_values,
+            "start_frequency": self.start_frequency,
+            "stop_frequency": self.stop_frequency,
+            "num_points": self.num_points,
+            "stim_lvl_dbm": self.stim_lvl_dbm,
+            "avg_count": self.avg_count,
+            "num_sweeps": self.num_sweeps,
+            "ifbw_values": self.ifbw_values,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'SweepConfig':
+    def from_dict(cls, data: dict) -> "SweepConfig":
         """Create from dictionary (YAML config)."""
-        config = data.get('configurations', {})
-        target = data.get('target', {})
+        config = data.get("configurations", {})
+        target = data.get("target", {})
 
         # Handle both single IFBW value and list
-        ifbw_values = target.get('ifbw_values', [50000])
+        ifbw_values = target.get("ifbw_values", [50000])
         if isinstance(ifbw_values, int):
             ifbw_values = [ifbw_values]
 
         return cls(
-            start_frequency=config.get('start_frequency', 2430000000),
-            stop_frequency=config.get('stop_frequency', 2450000000),
-            num_points=config.get('num_points', 300),
-            stim_lvl_dbm=config.get('stim_lvl_dbm', -10),
-            avg_count=config.get('avg_count', 1),
-            num_sweeps=config.get('num_sweeps', 30),
+            start_frequency=config.get("start_frequency", 200000000),
+            stop_frequency=config.get("stop_frequency", 250000000),
+            num_points=config.get("num_points", 801),
+            stim_lvl_dbm=config.get("stim_lvl_dbm", -10),
+            avg_count=config.get("avg_count", 1),
+            num_sweeps=config.get("num_sweeps", 30),
             ifbw_values=ifbw_values,
         )
 
@@ -98,6 +101,7 @@ class SweepConfig:
 @dataclass
 class SweepData:
     """Single sweep measurement data."""
+
     sweep_index: int
     ifbw_hz: int
     frequencies_hz: np.ndarray
@@ -135,9 +139,7 @@ class VNADataModel:
             True if device connected AND calibration loaded AND config valid
         """
         return (
-            self.device.connected and
-            self.calibration.loaded and
-            self.config.is_valid()
+            self.device.connected and self.calibration.loaded and self.config.is_valid()
         )
 
     def add_sweep_data(
@@ -146,7 +148,7 @@ class VNADataModel:
         ifbw_hz: int,
         frequencies_hz: np.ndarray,
         s11_db: np.ndarray,
-        sweep_time: float = 0.0
+        sweep_time: float = 0.0,
     ) -> None:
         """
         Add a completed sweep to the model.
@@ -163,7 +165,7 @@ class VNADataModel:
             ifbw_hz=ifbw_hz,
             frequencies_hz=frequencies_hz,
             s11_db=s11_db,
-            timestamp=sweep_time
+            timestamp=sweep_time,
         )
         self.sweep_data.append(sweep)
 
@@ -205,22 +207,22 @@ class VNADataModel:
         """
         if not self.sweep_times:
             return {
-                'mean_time': 0.0,
-                'std_time': 0.0,
-                'min_time': 0.0,
-                'max_time': 0.0,
-                'sweep_rate_hz': 0.0,
-                'total_sweeps': 0
+                "mean_time": 0.0,
+                "std_time": 0.0,
+                "min_time": 0.0,
+                "max_time": 0.0,
+                "sweep_rate_hz": 0.0,
+                "total_sweeps": 0,
             }
 
         times = np.array(self.sweep_times)
         return {
-            'mean_time': float(np.mean(times)),
-            'std_time': float(np.std(times)),
-            'min_time': float(np.min(times)),
-            'max_time': float(np.max(times)),
-            'sweep_rate_hz': 1.0 / np.mean(times) if np.mean(times) > 0 else 0.0,
-            'total_sweeps': len(self.sweep_times)
+            "mean_time": float(np.mean(times)),
+            "std_time": float(np.std(times)),
+            "min_time": float(np.min(times)),
+            "max_time": float(np.max(times)),
+            "sweep_rate_hz": 1.0 / np.mean(times) if np.mean(times) > 0 else 0.0,
+            "total_sweeps": len(self.sweep_times),
         }
 
     def convert_s11_complex_to_db(self, s11_complex: np.ndarray) -> np.ndarray:

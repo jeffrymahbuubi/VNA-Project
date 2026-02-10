@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import QFileDialog
 from pathlib import Path
 import logging
+import shutil
 import yaml
 import numpy as np
 from typing import Optional
@@ -207,27 +208,42 @@ class VNAPresenter(QObject):
         Auto-detect calibration and config files on startup.
 
         Checks gui/mvp/ directory for:
-          - SOLT_1_2_43G-2_45G_300pt.cal (colocated with backend)
+          - Any .cal file (most recently modified is selected)
         Checks gui/ directory for:
           - sweep_config.yaml
         """
         gui_dir = Path(__file__).parent.parent
         mvp_dir = Path(__file__).parent  # gui/mvp/ -- colocated with backend
 
-        # Check for calibration file in gui/mvp/ (colocated with backend scripts).
-        # Store just the filename -- the backend resolves it relative to _MODULE_DIR
-        # and the GUI subprocess CWD is set to gui/mvp/, so the SCPI :VNA:CAL:LOAD?
-        # command receives only the filename, avoiding full Windows paths with spaces
-        # that break SCPI parsing.
-        cal_path = mvp_dir / "SOLT_1_2_43G-2_45G_300pt.cal"
-        if cal_path.exists():
-            # Store just the filename -- avoids full Windows paths in SCPI commands
-            self.model.calibration.file_path = cal_path.name
+        # Auto-detect calibration files in gui/mvp/ (colocated with backend).
+        # Uses glob to find ALL .cal files rather than hardcoding a filename.
+        # Store just the filename -- the backend resolves it relative to
+        # _MODULE_DIR and the GUI subprocess CWD is set to gui/mvp/, so the
+        # SCPI :VNA:CAL:LOAD? command receives only the filename, avoiding
+        # full Windows paths with spaces that break SCPI parsing.
+        cal_files = sorted(
+            mvp_dir.glob("*.cal"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+        if cal_files:
+            selected_cal = cal_files[0]
+            self.model.calibration.file_path = selected_cal.name
             self.model.calibration.loaded = True
-            self.view.set_calibration_status(True, cal_path.name)
-            self.view.show_status_message(
-                f"Auto-loaded: {cal_path.name}", timeout=0
-            )
+            self.view.set_calibration_status(True, selected_cal.name)
+
+            if len(cal_files) == 1:
+                self.view.show_status_message(
+                    f"Auto-loaded: {selected_cal.name}", timeout=0
+                )
+            else:
+                all_names = ", ".join(p.name for p in cal_files)
+                self.view.show_status_message(
+                    f"Auto-loaded: {selected_cal.name} "
+                    f"({len(cal_files)} cal files found: {all_names})",
+                    timeout=0,
+                )
         else:
             self.view.show_status_message(
                 "No calibration file found in gui/mvp/", timeout=0
@@ -463,19 +479,50 @@ class VNAPresenter(QObject):
 
     @Slot()
     def _on_load_calibration_requested(self):
-        """Handle 'Load Calibration' menu action."""
+        """
+        Handle 'Load Calibration' menu action.
+
+        Opens a file dialog for the user to select a .cal file. If the
+        selected file is not already in the gui/mvp/ directory, it is
+        copied there so that the SCPI :VNA:CAL:LOAD? command can resolve
+        it by filename only (the GUI subprocess CWD is gui/mvp/).
+
+        The model always stores just the filename (never the full path)
+        to avoid Windows paths with spaces breaking SCPI parsing.
+        """
+        mvp_dir = Path(__file__).parent
+
         file_path, _ = QFileDialog.getOpenFileName(
             self.view,
             "Select Calibration File",
-            str(Path.home()),
+            str(mvp_dir),
             "Calibration Files (*.cal);;All Files (*)"
         )
 
         if file_path:
-            self.model.calibration.file_path = file_path
+            source = Path(file_path)
+            target = mvp_dir / source.name
+
+            # If the file is NOT already in gui/mvp/, copy it there so
+            # the SCPI command can find it by filename alone.
+            if source.parent.resolve() != mvp_dir.resolve():
+                try:
+                    shutil.copy2(source, target)
+                    self.view.show_status_message(
+                        f"Copied {source.name} to gui/mvp/", timeout=3000
+                    )
+                except Exception as e:
+                    self.view.show_error_dialog(
+                        "Copy Error",
+                        f"Could not copy calibration file to gui/mvp/:\n{e}"
+                    )
+                    return
+
+            # Always store just the filename (not full path)
+            self.model.calibration.file_path = source.name
             self.model.calibration.loaded = True
-            self.view.set_calibration_status(True, Path(file_path).name)
-            self.view.show_status_message(f"Loaded: {Path(file_path).name}")
+            self.view.set_calibration_status(True, source.name)
+            self.view.show_status_message(f"Loaded: {source.name}")
             self._update_collect_button_state()
 
     @Slot()
