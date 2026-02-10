@@ -39,9 +39,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # The SOLT calibration file produced by LibreVNA-GUI.
 # Layout: script/ is a sibling of calibration/ under LibreVNA-dev/
-CAL_FILE_PATH = os.path.normpath(
-    os.path.join(SCRIPT_DIR, "..", "calibration", "SOLT_1_2_43G-2_45G_300pt.cal")
-)
+CAL_FILE_PATH = os.path.normpath("SOLT_1_2_43G-2_45G_300pt.cal")
 
 # TCP connection parameters.  The user has configured LibreVNA-GUI to serve
 # SCPI on port 1234 instead of the default 19542.
@@ -51,6 +49,7 @@ SCPI_PORT = 1234
 # ---------------------------------------------------------------------------
 # Section divider helper (keeps output scannable without colour codes)
 # ---------------------------------------------------------------------------
+
 
 def _section(title):
     """Print a dashed section header."""
@@ -68,6 +67,7 @@ def _subsection(title):
 # ===========================================================================
 # SECTION 1  --  Calibration file parsing
 # ===========================================================================
+
 
 def load_calibration(path):
     """
@@ -99,11 +99,11 @@ def summarise_calibration(cal):
     summary = {}
 
     # -- Top-level metadata ------------------------------------------------
-    summary["cal_type"]      = cal.get("type", "UNKNOWN")
+    summary["cal_type"] = cal.get("type", "UNKNOWN")
     summary["device_serial"] = cal.get("device", "UNKNOWN")
-    summary["cal_version"]   = cal.get("version", "UNKNOWN")
-    summary["format"]        = cal.get("format", "UNKNOWN")
-    summary["ports"]         = cal.get("ports", [])
+    summary["cal_version"] = cal.get("version", "UNKNOWN")
+    summary["format"] = cal.get("format", "UNKNOWN")
+    summary["ports"] = cal.get("ports", [])
 
     # -- Calkit block ------------------------------------------------------
     calkit = cal.get("calkit", {})
@@ -123,13 +123,13 @@ def summarise_calibration(cal):
     # directly on each point; the Through (2-port) standard has frequency plus
     # an Sparam sub-dict.
     measurements_raw = cal.get("measurements", [])
-    freq_all = []          # will hold every frequency value seen
-    meas_summary = []      # per-measurement metadata
+    freq_all = []  # will hold every frequency value seen
+    meas_summary = []  # per-measurement metadata
 
     for meas in measurements_raw:
-        mtype   = meas.get("type", "?")
-        data    = meas.get("data", {})
-        points  = data.get("points", [])
+        mtype = meas.get("type", "?")
+        data = meas.get("data", {})
+        points = data.get("points", [])
         num_pts = len(points)
 
         # Determine whether this is a 1-port or 2-port measurement by
@@ -151,13 +151,15 @@ def summarise_calibration(cal):
         else:
             port_info = "port={}".format(data.get("port", "?"))
 
-        meas_summary.append({
-            "type":      mtype,
-            "port_info": port_info,
-            "num_points": num_pts,
-            "is_2port":  is_2port,
-            "timestamp": data.get("timestamp", None)
-        })
+        meas_summary.append(
+            {
+                "type": mtype,
+                "port_info": port_info,
+                "num_points": num_pts,
+                "is_2port": is_2port,
+                "timestamp": data.get("timestamp", None),
+            }
+        )
 
     summary["measurements"] = meas_summary
 
@@ -181,14 +183,16 @@ def summarise_calibration(cal):
 
     # Frequency range -- convert to GHz for readability, keep raw Hz too
     if summary["freq_min_hz"] is not None:
-        print("  Freq range      : {:.6f} GHz  --  {:.6f} GHz".format(
-            summary["freq_min_hz"] / 1e9,
-            summary["freq_max_hz"] / 1e9
-        ))
-        print("                    ({} Hz  --  {} Hz)".format(
-            int(summary["freq_min_hz"]),
-            int(summary["freq_max_hz"])
-        ))
+        print(
+            "  Freq range      : {:.6f} GHz  --  {:.6f} GHz".format(
+                summary["freq_min_hz"] / 1e9, summary["freq_max_hz"] / 1e9
+            )
+        )
+        print(
+            "                    ({} Hz  --  {} Hz)".format(
+                int(summary["freq_min_hz"]), int(summary["freq_max_hz"])
+            )
+        )
     else:
         print("  Freq range      : NO MEASUREMENT POINTS FOUND")
 
@@ -198,20 +202,24 @@ def summarise_calibration(cal):
 
     _subsection("Measurement records")
     # Header row
-    print("    {:>2s}  {:<10s}  {:>8s}  {:<20s}  {:<12s}  {}".format(
-        "#", "Type", "Points", "Port info", "2-port?", "Timestamp"
-    ))
+    print(
+        "    {:>2s}  {:<10s}  {:>8s}  {:<20s}  {:<12s}  {}".format(
+            "#", "Type", "Points", "Port info", "2-port?", "Timestamp"
+        )
+    )
     print("    " + "-" * 66)
     for idx, m in enumerate(summary["measurements"], start=1):
         ts_str = str(m["timestamp"]) if m["timestamp"] else "N/A"
-        print("    {:>2d}  {:<10s}  {:>8d}  {:<20s}  {:<12s}  {}".format(
-            idx,
-            m["type"],
-            m["num_points"],
-            m["port_info"],
-            "YES" if m["is_2port"] else "no",
-            ts_str
-        ))
+        print(
+            "    {:>2d}  {:<10s}  {:>8d}  {:<20s}  {:<12s}  {}".format(
+                idx,
+                m["type"],
+                m["num_points"],
+                m["port_info"],
+                "YES" if m["is_2port"] else "no",
+                ts_str,
+            )
+        )
 
     return summary
 
@@ -219,6 +227,7 @@ def summarise_calibration(cal):
 # ===========================================================================
 # SECTION 2  --  SCPI device connection and identification
 # ===========================================================================
+
 
 def connect_and_check(cal_summary):
     """
@@ -238,12 +247,12 @@ def connect_and_check(cal_summary):
     """
 
     result = {
-        "connection_ok" : False,
-        "idn_response"  : None,
-        "esr_value"     : None,
-        "esr_healthy"   : None,     # True / False / None (if query failed)
-        "device_serial" : None,     # from DEVice:CONNect?
-        "error_log"     : []        # human-readable errors encountered
+        "connection_ok": False,
+        "idn_response": None,
+        "esr_value": None,
+        "esr_healthy": None,  # True / False / None (if query failed)
+        "device_serial": None,  # from DEVice:CONNect?
+        "error_log": [],  # human-readable errors encountered
     }
 
     _section("DEVICE CONNECTION CHECK")
@@ -253,7 +262,7 @@ def connect_and_check(cal_summary):
     # "import libreVNA" finds the co-located copy, not any system-installed one.
     sys.path.insert(0, SCRIPT_DIR)
     try:
-        import libreVNA as libreVNA_mod   # module object
+        import libreVNA as libreVNA_mod  # module object
     except ImportError as exc:
         msg = (
             "ImportError: could not import libreVNA module from\n"
@@ -264,9 +273,7 @@ def connect_and_check(cal_summary):
         result["error_log"].append(msg)
         return result
 
-    print("  Module path     : {}".format(
-        os.path.abspath(libreVNA_mod.__file__)
-    ))
+    print("  Module path     : {}".format(os.path.abspath(libreVNA_mod.__file__)))
 
     # The libreVNA class constructor opens the TCP socket immediately.
     # If LibreVNA-GUI is not running or the port is wrong, it raises.
@@ -286,7 +293,7 @@ def connect_and_check(cal_summary):
         )
         print("  [FAIL] " + msg)
         result["error_log"].append(msg)
-        return result   # nothing else can proceed without a socket
+        return result  # nothing else can proceed without a socket
 
     # -- Step B: *IDN? -- identification ------------------------------------
     # Per the Programming Guide (4.1.1), the response format is:
@@ -337,20 +344,18 @@ def connect_and_check(cal_summary):
             print("  ESR value       : {} (flags detected)".format(esr))
             # Decode and print every set bit
             bit_map = {
-                1:   "OPC  - Operation complete",
-                2:   "RQC  - Request control",
-                4:   "QYE  - Query error",
-                8:   "DDE  - Device dependent error",
-                16:  "EXE  - Execution error",
-                32:  "CME  - Command error",
-                64:  "URQ  - User request",
-                128: "PON  - Power on"
+                1: "OPC  - Operation complete",
+                2: "RQC  - Request control",
+                4: "QYE  - Query error",
+                8: "DDE  - Device dependent error",
+                16: "EXE  - Execution error",
+                32: "CME  - Command error",
+                64: "URQ  - User request",
+                128: "PON  - Power on",
             }
             for bit_val in sorted(bit_map.keys()):
                 if esr & bit_val:
-                    print("    [SET] bit {:>3d}  {}".format(
-                        bit_val, bit_map[bit_val]
-                    ))
+                    print("    [SET] bit {:>3d}  {}".format(bit_val, bit_map[bit_val]))
 
     except Exception as exc:
         msg = "*ESR? query failed: {}".format(exc)
@@ -393,7 +398,7 @@ def connect_and_check(cal_summary):
     # that the consolidated info block can still print everything else.
     _subsection("VNA:CAL:LOAD? -- loading calibration")
     try:
-        cal_abs_path = os.path.normpath(os.path.abspath(CAL_FILE_PATH))
+        cal_abs_path = os.path.normpath(CAL_FILE_PATH)
         print("  Cal file path   : {}".format(cal_abs_path))
 
         load_response = vna.query(":VNA:CAL:LOAD? " + cal_abs_path)
@@ -425,6 +430,7 @@ def connect_and_check(cal_summary):
 # SECTION 3  --  Consolidated info block
 # ===========================================================================
 
+
 def print_info_block(cal_summary, device_info):
     """
     Print the final side-by-side comparison block that lets the operator
@@ -438,7 +444,7 @@ def print_info_block(cal_summary, device_info):
     print("  Connection status : {}".format(conn_status))
 
     # -- Serial comparison --------------------------------------------------
-    cal_serial  = cal_summary.get("device_serial", "N/A")
+    cal_serial = cal_summary.get("device_serial", "N/A")
     live_serial = device_info.get("device_serial")
 
     print("  Cal file serial   : {}".format(cal_serial))
@@ -460,10 +466,11 @@ def print_info_block(cal_summary, device_info):
     # -- Calibration metadata -----------------------------------------------
     print("  Cal type          : {}".format(cal_summary.get("cal_type", "N/A")))
     if cal_summary.get("freq_min_hz") is not None:
-        print("  Cal freq range    : {:.6f} GHz  --  {:.6f} GHz".format(
-            cal_summary["freq_min_hz"] / 1e9,
-            cal_summary["freq_max_hz"] / 1e9
-        ))
+        print(
+            "  Cal freq range    : {:.6f} GHz  --  {:.6f} GHz".format(
+                cal_summary["freq_min_hz"] / 1e9, cal_summary["freq_max_hz"] / 1e9
+            )
+        )
     else:
         print("  Cal freq range    : N/A")
 
@@ -474,9 +481,11 @@ def print_info_block(cal_summary, device_info):
     # -- ESR status echo ----------------------------------------------------
     if device_info.get("esr_value") is not None:
         healthy_str = "healthy" if device_info["esr_healthy"] else "FLAGS SET"
-        print("  ESR value         : {}  ({})".format(
-            device_info["esr_value"], healthy_str
-        ))
+        print(
+            "  ESR value         : {}  ({})".format(
+                device_info["esr_value"], healthy_str
+            )
+        )
 
     # -- Any errors that were collected along the way -----------------------
     if device_info["error_log"]:
@@ -490,6 +499,7 @@ def print_info_block(cal_summary, device_info):
 # ===========================================================================
 # main
 # ===========================================================================
+
 
 def main():
     """
@@ -507,20 +517,29 @@ def main():
     # ------------------------------------------------------------------
     cal_summary = None
     try:
-        cal_data    = load_calibration(CAL_FILE_PATH)
+        cal_data = load_calibration(CAL_FILE_PATH)
         cal_summary = summarise_calibration(cal_data)
     except FileNotFoundError:
         _section("CALIBRATION FILE SUMMARY")
-        print("  [FAIL] File not found:\n"
-              "         {}".format(CAL_FILE_PATH))
-        cal_summary = {"device_serial": None, "freq_min_hz": None,
-                       "freq_max_hz": None, "cal_type": "N/A"}
+        print("  [FAIL] File not found:\n" "         {}".format(CAL_FILE_PATH))
+        cal_summary = {
+            "device_serial": None,
+            "freq_min_hz": None,
+            "freq_max_hz": None,
+            "cal_type": "N/A",
+        }
     except json.JSONDecodeError as exc:
         _section("CALIBRATION FILE SUMMARY")
-        print("  [FAIL] JSON decode error in calibration file:\n"
-              "         {}".format(exc))
-        cal_summary = {"device_serial": None, "freq_min_hz": None,
-                       "freq_max_hz": None, "cal_type": "N/A"}
+        print(
+            "  [FAIL] JSON decode error in calibration file:\n"
+            "         {}".format(exc)
+        )
+        cal_summary = {
+            "device_serial": None,
+            "freq_min_hz": None,
+            "freq_max_hz": None,
+            "cal_type": "N/A",
+        }
 
     # ------------------------------------------------------------------
     # 2. Live device connection + SCPI queries
