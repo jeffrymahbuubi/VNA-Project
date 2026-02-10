@@ -8,6 +8,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The virtual environment lives at `code/.venv`. Dependencies are in `code/requirements.txt`.
 - LibreVNA-GUI binary: `code/LibreVNA-dev/tools/LibreVNA-GUI`. Scripts 3+ auto-start it in headless mode (`QT_QPA_PLATFORM=offscreen`) and poll TCP port 1234 for readiness.
 
+## GitHub Integration
+
+When working with GitHub repository tasks (issues, pull requests, branches, commits, code search, etc.), **always use the GitHub MCP server tools** instead of the `gh` CLI or git commands where applicable:
+
+- **Creating/managing issues:** Use `mcp__github__issue_write`, `mcp__github__list_issues`, `mcp__github__search_issues`
+- **Creating/managing PRs:** Use `mcp__github__create_pull_request`, `mcp__github__list_pull_requests`, `mcp__github__pull_request_read`
+- **Repository operations:** Use `mcp__github__create_branch`, `mcp__github__list_branches`, `mcp__github__search_code`
+- **File operations:** Use `mcp__github__get_file_contents`, `mcp__github__create_or_update_file`, `mcp__github__push_files`
+
+**Tool selection guidance:**
+- Use `list_*` tools for broad retrieval with pagination (e.g., all issues, all PRs)
+- Use `search_*` tools for targeted queries with specific criteria or keywords
+- Check for issue/PR templates in `.github/` before creating new items
+- Always call `mcp__github__get_me` first to understand current user permissions
+
+Load GitHub MCP tools using the `ToolSearch` tool before first use (e.g., `ToolSearch` with query "github issue" or "select:mcp__github__issue_write").
+
 ## Repository Layout
 
 ```
