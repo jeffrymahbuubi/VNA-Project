@@ -233,6 +233,13 @@ class VNAPresenter(QObject):
             self.model.calibration.loaded = True
             self.view.set_calibration_status(True, selected_cal.name)
 
+            # Extract frequency range and num_points from the cal file.
+            # The cal file is the single source of truth for these values.
+            try:
+                self.model.config.update_from_cal_file(str(selected_cal))
+            except (FileNotFoundError, ValueError) as e:
+                logger.warning("Failed to parse cal file for freq/points: %s", e)
+
             if len(cal_files) == 1:
                 self.view.show_status_message(
                     f"Auto-loaded: {selected_cal.name}", timeout=0
@@ -256,8 +263,20 @@ class VNAPresenter(QObject):
                 with open(yaml_path) as f:
                     config_dict = yaml.safe_load(f)
 
-                # Load into model
+                # Load into model (freq/points remain as zero placeholders)
                 self.model.config = SweepConfig.from_dict(config_dict)
+
+                # Re-apply cal-file freq/points onto the new config object.
+                # from_dict() does not read these from YAML; the cal file is
+                # the single source of truth.
+                if self.model.calibration.loaded and self.model.calibration.file_path:
+                    try:
+                        cal_path = mvp_dir / self.model.calibration.file_path
+                        self.model.config.update_from_cal_file(str(cal_path))
+                    except (FileNotFoundError, ValueError) as e:
+                        logger.warning(
+                            "Failed to re-apply cal file after YAML load: %s", e
+                        )
 
                 # Populate view widgets
                 self.view.populate_sweep_config(self.model.config.to_dict())
@@ -522,6 +541,14 @@ class VNAPresenter(QObject):
             self.model.calibration.file_path = source.name
             self.model.calibration.loaded = True
             self.view.set_calibration_status(True, source.name)
+
+            # Extract frequency range and num_points from the new cal file.
+            try:
+                self.model.config.update_from_cal_file(str(target))
+                self.view.populate_sweep_config(self.model.config.to_dict())
+            except (FileNotFoundError, ValueError) as e:
+                logger.warning("Failed to parse cal file for freq/points: %s", e)
+
             self.view.show_status_message(f"Loaded: {source.name}")
             self._update_collect_button_state()
 
@@ -541,6 +568,20 @@ class VNAPresenter(QObject):
                     config_dict = yaml.safe_load(f)
 
                 self.model.config = SweepConfig.from_dict(config_dict)
+
+                # Re-apply cal-file freq/points onto the new config object.
+                # from_dict() does not read these from YAML; the cal file is
+                # the single source of truth.
+                if self.model.calibration.loaded and self.model.calibration.file_path:
+                    try:
+                        mvp_dir = Path(__file__).parent
+                        cal_path = mvp_dir / self.model.calibration.file_path
+                        self.model.config.update_from_cal_file(str(cal_path))
+                    except (FileNotFoundError, ValueError) as e:
+                        logger.warning(
+                            "Failed to re-apply cal file after config load: %s", e
+                        )
+
                 self.view.populate_sweep_config(self.model.config.to_dict())
                 self.view.show_status_message(f"Loaded: {Path(file_path).name}")
                 self._update_collect_button_state()
