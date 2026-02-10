@@ -253,12 +253,12 @@ class GUIVNASweepAdapter:
         import tempfile
         import yaml
 
-        # Convert config_dict to YAML structure expected by script 6
+        # Convert config_dict to YAML structure expected by BaseVNASweep.
+        # Note: start_frequency, stop_frequency, and num_points are now
+        # extracted from the .cal file by BaseVNASweep.parse_calibration_file(),
+        # so they are NOT included in the YAML config.
         yaml_config = {
             'configurations': {
-                'start_frequency': self.config['start_frequency'],
-                'stop_frequency': self.config['stop_frequency'],
-                'num_points': self.config['num_points'],
                 'stim_lvl_dbm': self.config['stim_lvl_dbm'],
                 'avg_count': self.config['avg_count'],
                 'num_sweeps': self.config['num_sweeps'],
