@@ -77,13 +77,13 @@ uv run python 6_librevna_gui_mode_sweep_test.py --no-save                # skip 
 
 ### sweep_config.yaml
 
-All sweep parameters for script 6 live here (`scripts/sweep_config.yaml`). Structure:
+Sweep parameters for script 6 live here (`scripts/sweep_config.yaml`). Frequency
+range and point count are **not** in this file — they are extracted from the
+calibration file (`.cal`, JSON format) passed via `--cal-file`. This ensures
+the sweep always matches the calibration boundaries.
 
 ```yaml
 configurations:
-  start_frequency: 2430000000      # Hz
-  stop_frequency:  2450000000      # Hz
-  num_points:      300
   stim_lvl_dbm:   -10
   avg_count:       1
   num_sweeps:      30              # sweeps per IFBW value
