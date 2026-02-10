@@ -136,7 +136,17 @@ class BaseVNASweep(ABC):
             If the file is not valid JSON, is missing required keys,
             or contains no measurement data.
         """
-        cal_abs = os.path.normpath(cal_file_path)
+        # Resolve the calibration file path:
+        # If cal_file_path is already absolute, use it as-is.
+        # If it is relative (e.g. a bare filename like "SOLT_1_200M-250M_801pt.cal"),
+        # resolve it against _MODULE_DIR (gui/mvp/) where .cal files are colocated.
+        # This matches the path resolution logic in load_calibration() (lines 405-410).
+        if os.path.isabs(cal_file_path):
+            cal_abs = os.path.normpath(cal_file_path)
+        else:
+            cal_abs = os.path.normpath(
+                os.path.join(_MODULE_DIR, cal_file_path)
+            )
 
         if not os.path.isfile(cal_abs):
             raise FileNotFoundError(
