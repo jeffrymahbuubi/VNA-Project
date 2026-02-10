@@ -21,3 +21,18 @@ Workarounds:
 - Use `-Name` parameter directly: `Get-Process -Name '*pattern*'`
 - Use `Select-String` instead of `Where-Object` for filtering text output
 - For complex filtering, write inline PowerShell script blocks or use ConvertTo-Json
+
+## Cal File as Single Source of Truth for Frequency/Points
+
+Since 2026-02-10, frequency range and num_points are extracted from the .cal file
+(JSON) rather than sweep_config.yaml.  This prevents sweep/cal boundary mismatches.
+
+- `BaseVNASweep.parse_calibration_file(path)` -- static method on both script 6
+  and gui/mvp/vna_backend.py copies.  Returns dict with start_frequency,
+  stop_frequency, num_points (all int Hz).
+- Cal file JSON path: `measurements[0].data.points[0].frequency` (first),
+  `measurements[0].data.points[-1].frequency` (last), `len(points)` (count).
+- sweep_config.yaml now only contains: stim_lvl_dbm, avg_count, num_sweeps,
+  and target.ifbw_values.
+- GUI model uses `SweepConfig.update_from_cal_file()` to populate freq/points
+  from the detected cal file at startup and on manual cal file load.
