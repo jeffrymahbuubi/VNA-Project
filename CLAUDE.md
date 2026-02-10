@@ -14,14 +14,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 code/
 ├── LibreVNA-dev/
 │   ├── scripts/           # All automation scripts + libreVNA.py wrapper
+│   ├── gui/               # PySide6 real-time VNA plotter (script 7)
+│   │   ├── mvp/           # Model-View-Presenter architecture components
+│   │   ├── sweep_config.yaml   # GUI sweep configuration
+│   │   └── SOLT_*.cal     # Calibration file for GUI
 │   ├── calibration/       # SOLT cal file (JSON, loaded via SCPI)
-│   ├── data/              # Timestamped CSV outputs from script runs
+│   ├── data/              # Timestamped CSV/XLSX outputs from script runs
 │   ├── notebook/          # Jupyter notebooks for post-run analysis
 │   ├── markdown/          # Written analysis docs, bug reports, latency breakdowns
 │   └── tools/             # LibreVNA-GUI binary
 ├── requirements.txt
 └── .venv/
-.claude/agents/            # Custom agent specs (librevna-python-expert, rf-data-analyst)
+.claude/agents/            # Custom agent specs (librevna-python-expert, rf-data-analyst, pyqt6-gui-developer)
 ```
 
 ## Script Numbering & Progression
@@ -36,6 +40,7 @@ Scripts build on each other. Each is self-contained but shares helpers via impor
 | `4_ifbw_parameter_sweep.py` | IFBW impact on speed/jitter | 3 IFBWs × 10 sweeps each |
 | `5_continuous_sweep_speed.py` | 30-sweep continuous benchmark | Enables streaming server, uses `add_live_callback` on port 19001 |
 | `6_librevna_gui_mode_sweep_test.py` | Unified single/continuous benchmark | Config-driven via `sweep_config.yaml`; multi-sheet xlsx export; dispatches mode via `--mode` flag |
+| `7_realtime_vna_plotter_mvp.py` | Real-time GUI plotter | PySide6 MVP architecture; pyqtgraph for plotting; QThread workers |
 
 ### Script 6 — class hierarchy & CLI
 
@@ -75,13 +80,57 @@ target:
 
 Output is a multi-sheet `.xlsx` workbook in `data/<YYYYMMDD>/` — one sheet per IFBW value.
 
+## Script 7 — Real-time GUI Application
+
+`gui/7_realtime_vna_plotter_mvp.py` is a PySide6 GUI for real-time S11 visualization using the MVP (Model-View-Presenter) pattern.
+
+### Running the GUI
+
+```bash
+cd code/LibreVNA-dev/gui
+uv run python 7_realtime_vna_plotter_mvp.py
+```
+
+**Requirements:**
+- LibreVNA device connected via USB (for data collection)
+- Calibration file: `gui/SOLT_1_2_43G-2_45G_300pt.cal`
+- Config file: `gui/sweep_config.yaml` (uses defaults if missing)
+
+### MVP Architecture
+
+- **Model** (`mvp/model.py`): Pure Python business logic, no GUI dependencies. Holds sweep configuration and data state.
+- **View** (`mvp/view.py`): PySide6 UI, display-only. Built with Qt Designer and compiled to `Ui_MainWindow`. Includes pyqtgraph PlotWidget for real-time plotting.
+- **Presenter** (`mvp/presenter.py`): Mediates Model ↔ View. Manages state machine and worker threads (DeviceProbeWorker, VNASweepWorker). All SCPI/backend operations run in QThreads to keep GUI responsive.
+- **Backend Wrapper** (`mvp/backend_wrapper.py`): Adapter that wraps `ContinuousModeSweep` from script 6. Bridges backend lifecycle to GUI signals/slots. Key methods:
+  - `start_lifecycle()` — GUI subprocess + streaming callback registration
+  - `ifbw_sweep_iteration()` — per-IFBW sweep loop
+  - `stop_lifecycle()` — teardown + SCPI close
+- **Standalone Backend** (`mvp/vna_backend.py`): Extracted `BaseVNASweep` and `ContinuousModeSweep` from script 6, with paths made configurable.
+
+### Thread Safety
+
+- All GUI updates MUST happen on the main thread.
+- Use Qt signals/slots for cross-thread communication.
+- Streaming callbacks run on libreVNA's TCP thread → emit Qt signal → slot runs on GUI thread → updates plot via `plot.setData()`.
+
+### User Workflow
+
+1. Launch GUI → auto-detects `.cal` and `.yaml` in `gui/` directory
+2. GUI populates device info and configuration widgets
+3. User edits config as needed (start/stop freq, IFBW values, etc.)
+4. Click "Collect Data" → button blinks red during collection
+5. Real-time S11 magnitude/phase plot updates during sweep
+6. Auto-saves to `data/YYYYMMDD/gui_sweep_collection_YYYYMMDD_HHMMSS.xlsx`
+
 ## libreVNA.py — SCPI Wrapper Contract
+
+Two copies exist: `scripts/libreVNA.py` (for CLI scripts) and `gui/mvp/libreVNA.py` (for GUI). Both are functionally identical.
 
 - `vna.cmd(cmd)` — fire-and-forget; auto-checks `*ESR?` and raises on error bits. Pass `check=False` for commands that spuriously set CME (e.g., `DEV:PREF` set).
 - `vna.query(query)` — send + read response; does **not** check ESR.
 - `VNA:CAL:LOAD?` is a **query** despite the `?`-less appearance in docs. Use `vna.query()`.
 - `add_live_callback(port, fn)` — opens a TCP stream to the given streaming port; `fn` is called once per JSON line. Runs on a background thread.
-- Known bug at line 148: `len(self.live_callbacks)` should be `len(self.live_callbacks[port])`. Thread cleanup still works; just the join guard is wrong.
+- **Known bug at line 148** (both copies): `len(self.live_callbacks)` should be `len(self.live_callbacks[port])`. Thread cleanup still works; just the join guard is wrong. If you fix this in one copy, apply the fix to both.
 
 ## SCPI Gotchas (read before writing any new script)
 
@@ -122,6 +171,16 @@ Returns `"TRUE"` or `"FALSE"`.
 
 - Use `NotebookEdit` tool for `.ipynb` files — the `Edit` tool will error on them.
 - When running `nbconvert`, `cd` into the notebook directory first and pass only the filename to `--output`.
+
+## Specialized Agents
+
+This project has custom Claude Code agents defined in `.claude/agents/`:
+
+- **librevna-python-expert** — Use for LibreVNA SCPI programming, Python automation scripts, calibration workflows, and USB protocol implementation. Has deep knowledge of SCPI commands, streaming servers, and the LibreVNA programming guide.
+- **rf-data-analyst** — Use for processing S-parameter data, Touchstone files (.s1p, .s2p), RF computations (VSWR, impedance, Smith charts), and scikit-rf library tasks.
+- **pyqt6-gui-developer** — Use for PySide6/PyQt6 GUI development, real-time plotting with pyqtgraph, signal/slot connections, and MVP pattern implementation. (Note: This project uses PySide6, not PyQt6, but the agent handles both.)
+
+When working on tasks related to these domains, Claude Code will automatically suggest using the appropriate specialized agent.
 
 ## Next: USB Direct Protocol
 
