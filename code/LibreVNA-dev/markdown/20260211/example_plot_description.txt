@@ -1,0 +1,12 @@
+Mandarin: 
+
+上圖為取VNA掃頻最低點匯聚成的raw_data繪製y軸為freq單位Mhz，x軸為時間單位秒peak的部分沒有設定的很好所以換算的bpm是不準的。
+下圖為每個取點的時間相減繪製y軸為時間差單位秒，x軸為數據點數量，途中標示的為最大值的時間差。
+
+---------
+
+English: 
+
+The top figure displays raw_data plotted from the lowest points of the VNA sweep, with the y-axis representing frequency in MHz and the x-axis representing time in seconds. The peak section was not configured optimally, resulting in inaccurate BPM conversions. The bottom figure shows the time difference between each data point, plotted with the y-axis representing time difference in seconds and the x-axis representing the number of data points. The marked point indicates the maximum time difference.
+
+Translated with DeepL.com (free version)
