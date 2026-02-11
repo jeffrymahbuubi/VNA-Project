@@ -613,7 +613,25 @@ class BaseVNASweep(ABC):
         result : SweepResult
             Must have all_s11_db populated.
         """
-        s11_arr = np.array(result.all_s11_db)  # shape (num_sweeps, num_points)
+        # Filter out any sweeps whose length differs from the expected
+        # num_points (e.g. partial sweeps from a streaming boundary miss).
+        expected_len = len(result.freq_hz)
+        valid_sweeps = [
+            s for s in result.all_s11_db if len(s) == expected_len
+        ]
+        if len(valid_sweeps) < len(result.all_s11_db):
+            n_dropped = len(result.all_s11_db) - len(valid_sweeps)
+            print(
+                "  [WARN] compute_metrics: dropped {} sweep(s) with "
+                "wrong point count (expected {})".format(n_dropped, expected_len)
+            )
+        if len(valid_sweeps) == 0:
+            print("  [WARN] compute_metrics: no valid sweeps -- metrics set to 0")
+            result.noise_floor = 0.0
+            result.trace_jitter = 0.0
+            return
+
+        s11_arr = np.array(valid_sweeps)  # shape (num_valid_sweeps, num_points)
 
         # Noise floor
         per_sweep_means = np.mean(s11_arr, axis=1)  # shape (num_sweeps,)
@@ -1268,13 +1286,21 @@ class ContinuousModeSweep(BaseVNASweep):
 
                 if point_num == state.num_points - 1:
                     sweep_end = time.time()
-                    state.sweep_end_times.append(sweep_end)
-                    state.sweep_start_times.append(state.sweep_start_time)
-                    state.all_s11_complex.append(list(state.current_s11))
-                    state.sweep_count += 1
+                    collected = list(state.current_s11)
 
-                    if state.sweep_count >= state.num_sweeps:
-                        state.done_event.set()
+                    if len(collected) == state.num_points:
+                        # Complete sweep -- save it
+                        state.sweep_end_times.append(sweep_end)
+                        state.sweep_start_times.append(state.sweep_start_time)
+                        state.all_s11_complex.append(collected)
+                        state.sweep_count += 1
+
+                        if state.sweep_count >= state.num_sweeps:
+                            state.done_event.set()
+                    else:
+                        # Partial sweep (e.g. streaming started mid-sweep)
+                        # -- discard and wait for the next complete one
+                        pass
 
         return _callback
 
