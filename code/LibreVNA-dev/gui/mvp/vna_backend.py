@@ -85,6 +85,7 @@ class SweepResult:
     sweep_times: list  # list[float] wall-clock seconds per sweep
     all_s11_db: list  # list[list[float]] [sweep_idx][point_idx]
     freq_hz: list  # list[float] frequency axis
+    all_timestamps: list = field(default_factory=list)  # list[list[float]], per-point timestamps for all completed sweeps
     noise_floor: float = 0.0  # filled by compute_metrics
     trace_jitter: float = 0.0  # filled by compute_metrics
 
@@ -646,18 +647,31 @@ class BaseVNASweep(ABC):
                 csv_path = os.path.join(out_dir, csv_filename)
 
                 sweep_db = result.all_s11_db[sweep_idx]
-                # GUI backend doesn't track timestamps - omit Time column
+                sweep_ts = (
+                    result.all_timestamps[sweep_idx]
+                    if sweep_idx < len(result.all_timestamps)
+                    else []
+                )
+
                 with open(csv_path, "w", newline="") as csvfile:
                     writer = csv.writer(csvfile)
-                    writer.writerow(["Frequency (Hz)", "Magnitude (dB)"])
+                    writer.writerow(["Time", "Frequency (Hz)", "Magnitude (dB)"])
 
                     for pt_idx, freq in enumerate(result.freq_hz):
+                        # Time column: HH:MM:SS.ffffff from epoch timestamp
+                        if pt_idx < len(sweep_ts):
+                            ts_str = datetime.fromtimestamp(
+                                sweep_ts[pt_idx]
+                            ).strftime("%H:%M:%S.%f")
+                        else:
+                            ts_str = ""
+
                         if pt_idx < len(sweep_db):
                             s11_db = round(sweep_db[pt_idx], 4)
                         else:
                             s11_db = ""
 
-                        writer.writerow([freq, s11_db])
+                        writer.writerow([ts_str, freq, s11_db])
 
                 global_sweep_num += 1
 
@@ -889,6 +903,8 @@ class ContinuousModeSweep(BaseVNASweep):
             self.sweep_start_times = []  # list[float]
             self.current_s11 = []  # list[complex], current sweep
             self.all_s11_complex = []  # list[list[complex]], all completed sweeps
+            self.current_timestamps = []  # list[float], per-point epoch timestamps for current sweep
+            self.all_timestamps = []  # list[list[float]], per-point timestamps for all completed sweeps
 
     # -----------------------------------------------------------------------
 
@@ -965,23 +981,36 @@ class ContinuousModeSweep(BaseVNASweep):
 
             point_num = data["pointNum"]
             s11_complex = data["measurements"].get("S11", complex(0, 0))
+            point_time = time.time()
 
             with state.lock:
                 if point_num == 0:
-                    state.sweep_start_time = time.time()
+                    state.sweep_start_time = point_time
                     state.current_s11 = []
+                    state.current_timestamps = []
 
                 state.current_s11.append(s11_complex)
+                state.current_timestamps.append(point_time)
 
                 if point_num == state.num_points - 1:
-                    sweep_end = time.time()
-                    state.sweep_end_times.append(sweep_end)
-                    state.sweep_start_times.append(state.sweep_start_time)
-                    state.all_s11_complex.append(list(state.current_s11))
-                    state.sweep_count += 1
+                    sweep_end = point_time
+                    collected = list(state.current_s11)
+                    collected_ts = list(state.current_timestamps)
 
-                    if state.sweep_count >= state.num_sweeps:
-                        state.done_event.set()
+                    if len(collected) == state.num_points:
+                        # Complete sweep -- save it
+                        state.sweep_end_times.append(sweep_end)
+                        state.sweep_start_times.append(state.sweep_start_time)
+                        state.all_s11_complex.append(collected)
+                        state.all_timestamps.append(collected_ts)
+                        state.sweep_count += 1
+
+                        if state.sweep_count >= state.num_sweeps:
+                            state.done_event.set()
+                    else:
+                        # Partial sweep (e.g. streaming started mid-sweep)
+                        # -- discard and wait for the next complete one
+                        pass
 
         return _callback
 
@@ -1135,6 +1164,7 @@ class ContinuousModeSweep(BaseVNASweep):
         )
 
         all_s11_db = []
+        all_timestamps = []
         sweep_times = []
 
         for i in range(fresh_state.sweep_count):
@@ -1149,6 +1179,7 @@ class ContinuousModeSweep(BaseVNASweep):
                     magnitude = 1e-12
                 s11_db_list.append(20.0 * math.log10(magnitude))
             all_s11_db.append(s11_db_list)
+            all_timestamps.append(fresh_state.all_timestamps[i])
 
         return SweepResult(
             mode="continuous",
@@ -1156,4 +1187,5 @@ class ContinuousModeSweep(BaseVNASweep):
             sweep_times=sweep_times,
             all_s11_db=all_s11_db,
             freq_hz=freq_hz,
+            all_timestamps=all_timestamps,
         )
