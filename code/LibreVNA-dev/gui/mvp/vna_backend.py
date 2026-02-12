@@ -18,10 +18,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import csv
 import yaml
 import numpy as np
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
 
 from .libreVNA import libreVNA
 
@@ -98,7 +97,7 @@ class SweepResult:
 class BaseVNASweep(ABC):
     """
     Shared lifecycle, GUI management, calibration loading, metric
-    computation, console summary, and xlsx export.  Concrete sweep
+    computation, console summary, and CSV export.  Concrete sweep
     logic (configure + run) is left to the subclasses.
     """
 
@@ -234,9 +233,9 @@ class BaseVNASweep(ABC):
         mode : str
             "single" or "continuous"
         summary : bool
-            Print PrettyTable summary
+            Print simple text summary
         save_data : bool
-            Write xlsx output
+            Write CSV bundle output
         """
         self.cal_file_path = cal_file_path
         self.mode = mode
@@ -592,206 +591,160 @@ class BaseVNASweep(ABC):
             ))
 
     # -----------------------------------------------------------------------
-    # xlsx export
+    # CSV bundle export
     # -----------------------------------------------------------------------
 
-    def save_xlsx(self, all_results, output_dir=None):
+    def save_csv_bundle(self, all_results, output_dir=None):
         """
-        Write a multi-sheet xlsx workbook.
+        Write a directory-based CSV bundle.
+
+        Directory structure
+        -------------------
+        {output_dir}/{mode}_sweep_test_{YYYYMMDD}_{HHMMSS}/
+            s11_sweep_1.csv
+            s11_sweep_2.csv
+            ...
+            s11_sweep_N.csv
+            summary.txt
+
+        Each s11_sweep_N.csv contains:
+            Time, Frequency (Hz), Magnitude (dB)
+
+        summary.txt contains simple text-formatted sections:
+            1. Sweep Configuration
+            2. Per-Sweep Timing
+            3. Summary Metrics
 
         Parameters
         ----------
         all_results : list[SweepResult]
         output_dir : str, optional
-            Directory for xlsx. If None, uses ../../data/YYYYMMDD/
+            Base directory for output. If None, uses ../../data/YYYYMMDD/
 
         Returns
         -------
         str
-            Absolute path of the written xlsx file.
+            Absolute path of the output directory.
         """
-        # -- Output path: output_dir or ../data/YYYYMMDD/ ---------------------
+        # -- Output directory: output_dir/{mode}_sweep_test_{timestamp}/ ------
         if output_dir is None:
             today = datetime.now().strftime("%Y%m%d")
             output_dir = os.path.join(_MODULE_DIR, "..", "..", "data", today)
 
-        os.makedirs(output_dir, exist_ok=True)
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = "{}_sweep_test_{}.xlsx".format(self.mode, timestamp)
-        full_path = os.path.join(output_dir, filename)
+        dir_name = "{}_sweep_test_{}".format(self.mode, timestamp)
+        out_dir = os.path.join(output_dir, dir_name)
+        os.makedirs(out_dir, exist_ok=True)
 
-        # -- Style definitions ------------------------------------------------
-        bold_font = Font(bold=True)
-        title_font = Font(bold=True, size=13)
-        section_font = Font(bold=True, size=12)
-        header_fill = PatternFill(
-            start_color="D6EAF8", end_color="D6EAF8", fill_type="solid"
-        )
+        # Flatten all sweeps from all IFBW runs into a single numbered sequence
+        global_sweep_num = 1
 
-        wb = Workbook()
+        for result in all_results:
+            # Write one CSV per sweep
+            for sweep_idx in range(len(result.all_s11_db)):
+                csv_filename = "s11_sweep_{}.csv".format(global_sweep_num)
+                csv_path = os.path.join(out_dir, csv_filename)
 
-        # ---- Sheet: Summary -------------------------------------------------
-        ws = wb.active
-        ws.title = "Summary"
+                sweep_db = result.all_s11_db[sweep_idx]
+                # GUI backend doesn't track timestamps - omit Time column
+                with open(csv_path, "w", newline="") as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(["Frequency (Hz)", "Magnitude (dB)"])
 
-        # Row 1: merged title
-        ws.cell(
-            row=1, column=1, value="VNA Sweep Test Summary -- {} mode".format(self.mode)
-        )
-        ws.cell(row=1, column=1).font = title_font
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=10)
+                    for pt_idx, freq in enumerate(result.freq_hz):
+                        if pt_idx < len(sweep_db):
+                            s11_db = round(sweep_db[pt_idx], 4)
+                        else:
+                            s11_db = ""
 
-        # Row 2: blank (already empty)
+                        writer.writerow([freq, s11_db])
 
-        # Row 3: headers
-        summary_headers = [
-            "Mode",
-            "IFBW (kHz)",
-            "Mean Time (s)",
-            "Mean Time (ms)",
-            "Std Dev (s)",
-            "Min Time (s)",
-            "Max Time (s)",
-            "Rate (Hz)",
-            "Noise Floor (dB)",
-            "Trace Jitter (dB)",
-        ]
-        for col_idx, hdr in enumerate(summary_headers, start=1):
-            cell = ws.cell(row=3, column=col_idx, value=hdr)
-            cell.font = bold_font
-            cell.fill = header_fill
+                global_sweep_num += 1
 
-        # Row 4+: data
-        for row_offset, r in enumerate(all_results):
-            row = 4 + row_offset
-            times_arr = np.array(r.sweep_times)
-            mean_t = float(np.mean(times_arr))
-            std_t = float(np.std(times_arr, ddof=1)) if len(times_arr) > 1 else 0.0
-            min_t = float(np.min(times_arr))
-            max_t = float(np.max(times_arr))
-            rate = 1.0 / mean_t if mean_t > 0 else float("inf")
+        # -- Write summary.txt ------------------------------------------------
+        summary_path = os.path.join(out_dir, "summary.txt")
+        with open(summary_path, "w") as f:
+            # Section 1: Sweep Configuration
+            f.write("=" * 70 + "\n")
+            f.write("  SWEEP CONFIGURATION\n")
+            f.write("=" * 70 + "\n\n")
 
-            values = [
-                r.mode,
-                r.ifbw_hz // 1000,
-                round(mean_t, 4),
-                round(mean_t * 1000, 4),
-                round(std_t, 4),
-                round(min_t, 4),
-                round(max_t, 4),
-                round(rate, 2),
-                round(r.noise_floor, 2),
-                round(r.trace_jitter, 2),
-            ]
-            for col_idx, val in enumerate(values, start=1):
-                ws.cell(row=row, column=col_idx, value=val)
+            f.write("{:<25}: {}\n".format("Mode", self.mode))
+            # IFBW: if multiple values, list them; else single value
+            if len(all_results) > 1:
+                ifbw_str = ", ".join(
+                    [str(r.ifbw_hz // 1000) for r in all_results]
+                ) + " kHz"
+            else:
+                ifbw_str = "{} kHz".format(all_results[0].ifbw_hz // 1000)
+            f.write("{:<25}: {}\n".format("IFBW (kHz)", ifbw_str))
+            f.write("{:<25}: {}\n".format("Start Freq (Hz)", self.start_freq_hz))
+            f.write("{:<25}: {}\n".format("Stop Freq (Hz)", self.stop_freq_hz))
+            f.write("{:<25}: {}\n".format("Points", self.num_points))
+            f.write("{:<25}: {}\n".format("STIM Level (dBm)", self.stim_lvl_dbm))
+            f.write("{:<25}: {}\n".format("Avg Count", self.avg_count))
+            f.write("{:<25}: {}\n".format("Num Sweeps", self.num_sweeps))
+            f.write("\n")
 
-        # ---- Per-IFBW sheets ------------------------------------------------
-        for r in all_results:
-            ifbw_khz = r.ifbw_hz // 1000
-            sheet_name = "IFBW_{}kHz".format(ifbw_khz)
-            ws = wb.create_sheet(title=sheet_name)
+            # Section 2: Per-Sweep Timing
+            f.write("=" * 70 + "\n")
+            f.write("  PER-SWEEP TIMING\n")
+            f.write("=" * 70 + "\n\n")
 
-            # ==== Config block (rows 1-9) ====================================
-            ws.cell(row=1, column=1, value="Configuration")
-            ws.cell(row=1, column=1).font = section_font
+            f.write("{:<10} {:<18} {:<18} {:<18}\n".format(
+                "Sweep #", "Sweep Time (s)", "Sweep Time (ms)", "Update Rate (Hz)"
+            ))
+            f.write("-" * 70 + "\n")
 
-            config_rows = [
-                ("Mode", self.mode),
-                ("IFBW (kHz)", ifbw_khz),
-                ("Start Freq (Hz)", self.start_freq_hz),
-                ("Stop Freq (Hz)", self.stop_freq_hz),
-                ("Points", self.num_points),
-                ("STIM Level (dBm)", self.stim_lvl_dbm),
-                ("Avg Count", self.avg_count),
-                ("Num Sweeps", self.num_sweeps),
-            ]
-            for i, (label, value) in enumerate(config_rows):
-                row = 2 + i  # rows 2-9
-                ws.cell(row=row, column=1, value=label).font = bold_font
-                ws.cell(row=row, column=2, value=value)
+            global_sweep_num = 1
+            for result in all_results:
+                for t in result.sweep_times:
+                    rate = 1.0 / t if t > 0 else float("inf")
+                    f.write("{:<10} {:<18.4f} {:<18.4f} {:<18.2f}\n".format(
+                        global_sweep_num,
+                        round(t, 4),
+                        round(t * 1000, 4),
+                        round(rate, 2),
+                    ))
+                    global_sweep_num += 1
 
-            # ==== Timing block (starts row 10) ===============================
-            timing_header_row = 10
-            ws.cell(row=timing_header_row, column=1, value="Timing")
-            ws.cell(row=timing_header_row, column=1).font = section_font
+            f.write("\n")
 
-            timing_cols = [
-                "Sweep #",
-                "Sweep Time (s)",
-                "Sweep Time (ms)",
-                "Update Rate (Hz)",
-            ]
-            col_header_row = timing_header_row + 1  # row 11
-            for col_idx, hdr in enumerate(timing_cols, start=1):
-                cell = ws.cell(row=col_header_row, column=col_idx, value=hdr)
-                cell.font = bold_font
-                cell.fill = header_fill
+            # Section 3: Summary Metrics
+            f.write("=" * 70 + "\n")
+            f.write("  SUMMARY METRICS\n")
+            f.write("=" * 70 + "\n\n")
 
-            for sweep_idx, t in enumerate(r.sweep_times):
-                row = col_header_row + 1 + sweep_idx  # row 12+
-                rate = 1.0 / t if t > 0 else float("inf")
-                ws.cell(row=row, column=1, value=sweep_idx + 1)
-                ws.cell(row=row, column=2, value=round(t, 4))
-                ws.cell(row=row, column=3, value=round(t * 1000, 4))
-                ws.cell(row=row, column=4, value=round(rate, 2))
+            f.write("{:<8} {:<12} {:<14} {:<12} {:<12} {:<12} {:<10} {:<16} {:<16}\n".format(
+                "Mode", "IFBW (kHz)", "Mean Time (s)", "Std Dev (s)",
+                "Min Time (s)", "Max Time (s)", "Rate (Hz)",
+                "Noise Floor (dB)", "Trace Jitter (dB)"
+            ))
+            f.write("-" * 70 + "\n")
 
-            # blank row after timing
-            traces_section_row = col_header_row + 1 + len(r.sweep_times) + 1
+            for r in all_results:
+                times_arr = np.array(r.sweep_times)
+                mean_t = float(np.mean(times_arr))
+                std_t = float(np.std(times_arr, ddof=1)) if len(times_arr) > 1 else 0.0
+                min_t = float(np.min(times_arr))
+                max_t = float(np.max(times_arr))
+                rate = 1.0 / mean_t if mean_t > 0 else float("inf")
 
-            # ==== S11 Traces block ============================================
-            ws.cell(row=traces_section_row, column=1, value="S11 Traces")
-            ws.cell(row=traces_section_row, column=1).font = section_font
+                f.write("{:<8} {:<12d} {:<14.4f} {:<12.4f} {:<12.4f} {:<12.4f} {:<10.2f} {:<16.2f} {:<16.4f}\n".format(
+                    r.mode,
+                    r.ifbw_hz // 1000,
+                    round(mean_t, 4),
+                    round(std_t, 4),
+                    round(min_t, 4),
+                    round(max_t, 4),
+                    round(rate, 2),
+                    round(r.noise_floor, 2),
+                    round(r.trace_jitter, 4),
+                ))
 
-            trace_col_header_row = traces_section_row + 1
-            # Column headers: Frequency (Hz) | Sweep_1 S11 (dB) | ...
-            ws.cell(row=trace_col_header_row, column=1, value="Frequency (Hz)")
-            ws.cell(row=trace_col_header_row, column=1).font = bold_font
-            ws.cell(row=trace_col_header_row, column=1).fill = header_fill
-            for s_idx in range(len(r.all_s11_db)):
-                col = 2 + s_idx
-                ws.cell(
-                    row=trace_col_header_row,
-                    column=col,
-                    value="Sweep_{} S11 (dB)".format(s_idx + 1),
-                )
-                ws.cell(row=trace_col_header_row, column=col).font = bold_font
-                ws.cell(row=trace_col_header_row, column=col).fill = header_fill
+            f.write("\n")
 
-            # Data rows: one per frequency point
-            for pt_idx, freq in enumerate(r.freq_hz):
-                row = trace_col_header_row + 1 + pt_idx
-                ws.cell(row=row, column=1, value=freq)
-                for s_idx in range(len(r.all_s11_db)):
-                    ws.cell(
-                        row=row,
-                        column=2 + s_idx,
-                        value=round(r.all_s11_db[s_idx][pt_idx], 4),
-                    )
-
-            # blank row after traces
-            metrics_section_row = trace_col_header_row + 1 + len(r.freq_hz) + 1
-
-            # ==== Metrics block ===============================================
-            ws.cell(row=metrics_section_row, column=1, value="Metrics")
-            ws.cell(row=metrics_section_row, column=1).font = section_font
-
-            ws.cell(row=metrics_section_row + 1, column=1, value="Noise Floor (dB)")
-            ws.cell(row=metrics_section_row + 1, column=1).font = bold_font
-            ws.cell(
-                row=metrics_section_row + 1, column=2, value=round(r.noise_floor, 4)
-            )
-
-            ws.cell(row=metrics_section_row + 2, column=1, value="Trace Jitter (dB)")
-            ws.cell(row=metrics_section_row + 2, column=1).font = bold_font
-            ws.cell(
-                row=metrics_section_row + 2, column=2, value=round(r.trace_jitter, 6)
-            )
-
-        # -- Write workbook ---------------------------------------------------
-        wb.save(full_path)
-        return full_path
+        return out_dir
 
     # -----------------------------------------------------------------------
     # Lifecycle hooks  --  override in subclasses for one-time setup / teardown
@@ -879,11 +832,11 @@ class BaseVNASweep(ABC):
             if self.summary:
                 self.print_summary(all_results)
 
-            # -- xlsx export --------------------------------------------------
+            # -- CSV bundle export --------------------------------------------
             if self.save_data:
                 _section("SAVING RESULTS")
-                xlsx_path = self.save_xlsx(all_results)
-                print("  xlsx written    : {}".format(xlsx_path))
+                out_dir = self.save_csv_bundle(all_results)
+                print("  CSV bundle      : {}".format(out_dir))
 
             print()  # trailing blank line
 
