@@ -17,9 +17,10 @@ What it does (in order):
   5. Verifies that all ports have been freed after termination.
 
 Usage:
-    uv run python 0_librevna_cleanup.py          # diagnose only (safe)
-    uv run python 0_librevna_cleanup.py --kill    # diagnose + kill stale processes
-    uv run python 0_librevna_cleanup.py --force   # kill ALL LibreVNA-GUI instances
+    uv run python 0_librevna_cleanup.py                 # diagnose only (safe)
+    uv run python 0_librevna_cleanup.py --kill           # diagnose + kill stale LibreVNA-GUI processes
+    uv run python 0_librevna_cleanup.py --force          # kill ALL LibreVNA-GUI instances
+    uv run python 0_librevna_cleanup.py --kill-ports     # kill ANY process using LibreVNA ports
 
 Notes:
     - "Diagnose only" mode never terminates anything.  It is always safe to
@@ -28,6 +29,8 @@ Notes:
       expected binary path under this project tree.
     - The --force flag terminates ALL LibreVNA-GUI.exe processes regardless
       of path.  Use with care if you have multiple LibreVNA installations.
+    - The --kill-ports flag terminates ANY process holding LibreVNA ports,
+      regardless of process name.  Use when ports are blocked by other apps.
 """
 
 import argparse
@@ -196,6 +199,16 @@ def diagnose() -> tuple[list[dict], dict[int, dict]]:
 # Termination
 # ---------------------------------------------------------------------------
 
+def get_process_name(pid: int) -> str:
+    """Get the process name for a given PID."""
+    try:
+        ps_script = f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue).ProcessName"
+        result = run_powershell(ps_script)
+        return result if result else "unknown"
+    except Exception:
+        return "unknown"
+
+
 def kill_processes(processes: list[dict], force: bool = False) -> int:
     """Terminate LibreVNA-GUI processes.
 
@@ -218,6 +231,36 @@ def kill_processes(processes: list[dict], force: bool = False) -> int:
                 continue
 
         print(f"  Terminating PID {pid} ...", end=" ")
+        try:
+            run_powershell(f"Stop-Process -Id {pid} -Force")
+            print("OK")
+            killed += 1
+        except Exception as exc:
+            print(f"FAILED: {exc}")
+
+    return killed
+
+
+def kill_port_users(port_owners: dict[int, dict]) -> int:
+    """Terminate processes using LibreVNA ports.
+
+    Returns the number of processes terminated.
+    """
+    if not port_owners:
+        return 0
+
+    # Collect unique PIDs
+    pids_to_kill = set(info["pid"] for info in port_owners.values())
+    killed = 0
+
+    for pid in pids_to_kill:
+        # Find which ports this PID is using
+        ports_used = [port for port, info in port_owners.items() if info["pid"] == pid]
+        port_list = ", ".join(f":{p}" for p in sorted(ports_used))
+
+        proc_name = get_process_name(pid)
+        print(f"  Terminating PID {pid} ({proc_name}) using ports {port_list} ...", end=" ")
+
         try:
             run_powershell(f"Stop-Process -Id {pid} -Force")
             print("OK")
@@ -288,17 +331,40 @@ def main():
         action="store_true",
         help="Terminate ALL LibreVNA-GUI.exe processes regardless of path.",
     )
+    parser.add_argument(
+        "--kill-ports",
+        action="store_true",
+        help="Terminate ANY process using LibreVNA ports (use with caution).",
+    )
     args = parser.parse_args()
 
     processes, port_owners = diagnose()
 
+    # Handle --kill-ports flag
+    if args.kill_ports:
+        if not port_owners:
+            print("Nothing to kill — no processes are using LibreVNA ports.")
+            return 0
+
+        print(SEPARATOR)
+        print("  Terminating processes using LibreVNA ports")
+        print(SEPARATOR)
+        print()
+
+        killed = kill_port_users(port_owners)
+        print(f"\n  Terminated {killed} process(es) using LibreVNA ports.\n")
+
+        success = verify_cleanup()
+        return 0 if success else 1
+
+    # Handle --kill / --force flags (LibreVNA-GUI processes only)
     if args.kill or args.force:
         if not processes:
             print("Nothing to kill — no LibreVNA-GUI processes found.")
             return 0
 
         print(SEPARATOR)
-        print("  Terminating stale processes")
+        print("  Terminating stale LibreVNA-GUI processes")
         print(SEPARATOR)
         print()
 
@@ -308,9 +374,12 @@ def main():
         success = verify_cleanup()
         return 0 if success else 1
 
-    elif processes:
-        # Diagnose-only mode but found stale processes — hint to the user
-        print("  TIP: Run with --kill to terminate the stale process(es).")
+    # Diagnose-only mode — provide hints
+    if processes or port_owners:
+        if processes:
+            print("  TIP: Run with --kill to terminate LibreVNA-GUI process(es).")
+        if port_owners:
+            print("  TIP: Run with --kill-ports to terminate ANY process using the ports.")
         print()
         return 1
 
