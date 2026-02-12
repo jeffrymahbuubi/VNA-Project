@@ -20,6 +20,7 @@ gh
 .copilot/session-state/
 .copilot/pkg/
 .copilot/mcp-config.json
+.claude/settings.json
 
 # LibreVNA-GUI generated config directory
 LibreVNA/
