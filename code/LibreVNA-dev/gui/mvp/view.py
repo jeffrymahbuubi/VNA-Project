@@ -91,7 +91,12 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         self.plot_widget.setLabel('left', 'S11 Magnitude', units='dB')
         self.plot_widget.setLabel('bottom', 'Frequency', units='Hz')
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setYRange(-60, 0)  # Fixed range during collection
+        # Enable dynamic Y-axis auto-ranging with 5% padding so traces
+        # don't touch the plot edges.  The X-axis stays manual (set by
+        # the frequency data passed to update_plot).
+        view_box = self.plot_widget.getViewBox()
+        view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+        view_box.setDefaultPadding(0.05)
 
         # Create plot data item (yellow pen for S11 trace)
         self.plot_data_item = self.plot_widget.plot(
@@ -229,11 +234,23 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         """
         Update plot with new sweep data (overwrites previous trace).
 
+        After setting the new data, re-enables Y-axis auto-range so the
+        view always fits the current trace.  This also recovers auto-range
+        if the user previously zoomed/panned (which disables it in
+        pyqtgraph).  The 5% default padding set in _setup_plot_widget()
+        is preserved.
+
         Args:
             freq_hz: Frequency array in Hz
             s11_db: S11 magnitude in dB
         """
         self.plot_data_item.setData(freq_hz, s11_db)
+
+        # Re-enable Y auto-range so the axis rescales to the new data.
+        # Without this, a previous manual zoom would freeze the Y range.
+        self.plot_widget.getViewBox().enableAutoRange(
+            axis=pg.ViewBox.YAxis, enable=True
+        )
 
     def clear_plot(self):
         """Clear plot data (empty trace)."""
