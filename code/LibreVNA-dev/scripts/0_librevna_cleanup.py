@@ -29,8 +29,9 @@ Notes:
       expected binary path under this project tree.
     - The --force flag terminates ALL LibreVNA-GUI.exe processes regardless
       of path.  Use with care if you have multiple LibreVNA installations.
-    - The --kill-ports flag terminates ANY process holding LibreVNA ports,
-      regardless of process name.  Use when ports are blocked by other apps.
+    - The --kill-ports flag terminates processes holding LibreVNA ports, but
+      skips critical remote/tunneling services (SSH, VS Code remote, VPN, etc.)
+      to prevent breaking active remote sessions.
 """
 
 import argparse
@@ -57,6 +58,19 @@ LIBREVNA_PORTS = {
     19001: "VNA Calibrated streaming",
     19002: "VNA De-embedded streaming",
     19542: "Internal LibreVNA TCP",
+}
+
+# Process names to exclude from --kill-ports (remote/tunneling services)
+SAFE_PROCESS_NAMES = {
+    "sshd",          # SSH daemon
+    "ssh",           # SSH client
+    "code-server",   # VS Code remote
+    "devtunnel",     # Visual Studio devtunnel
+    "openvpn",       # OpenVPN
+    "wsl",           # Windows Subsystem for Linux
+    "docker",        # Docker Desktop
+    "putty",         # PuTTY SSH client
+    "remote",        # Generic remote service
 }
 
 SEPARATOR = "-" * 72
@@ -252,6 +266,9 @@ def kill_processes(processes: list[dict], force: bool = False) -> int:
 def kill_port_users(port_owners: dict[int, dict]) -> int:
     """Terminate processes using LibreVNA ports.
 
+    Skips processes in SAFE_PROCESS_NAMES (SSH, remote development, VPN, etc.)
+    to prevent breaking remote sessions.
+
     Returns the number of processes terminated.
     """
     if not port_owners:
@@ -267,6 +284,12 @@ def kill_port_users(port_owners: dict[int, dict]) -> int:
         port_list = ", ".join(f":{p}" for p in sorted(ports_used))
 
         proc_name = get_process_name(pid)
+
+        # Skip critical remote/tunneling processes
+        if proc_name.lower() in SAFE_PROCESS_NAMES:
+            print(f"  SKIP PID {pid} ({proc_name}) using ports {port_list} — critical process")
+            continue
+
         print(f"  Terminating PID {pid} ({proc_name}) using ports {port_list} ...", end=" ")
 
         try:
