@@ -28,6 +28,7 @@ import time
 import subprocess
 import platform
 import logging
+import shutil
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 import numpy as np
@@ -452,20 +453,27 @@ class GUIVNASweepAdapter:
         # Install monkey patch (ONCE -- never call this method again)
         self.sweep._make_callback = wrapped_make_callback
 
-    def save_results(self, custom_filename: Optional[str] = None) -> str:
+    def save_results(self, custom_dirname: Optional[str] = None) -> str:
         """
-        Export all accumulated results to multi-sheet xlsx workbook.
+        Export all accumulated results to CSV bundle directory.
 
-        Uses the backend's save_xlsx() method which writes to the standard
-        output directory (../../data/YYYYMMDD/ relative to the backend module).
+        Uses the backend's save_csv_bundle() method which writes to:
+          {output_dir}/{mode}_sweep_test_{YYYYMMDD}_{HHMMSS}/
+            s11_sweep_1.csv
+            s11_sweep_2.csv
+            ...
+            summary.txt
+
+        Each s11_sweep_N.csv contains columns: "Frequency (Hz)", "Magnitude (dB)"
+        summary.txt contains sweep configuration, per-sweep timing, and metrics.
 
         Args:
-            custom_filename: Optional custom filename (without extension).
-                If provided, the file is saved with this name in the standard
-                output directory instead of the auto-generated timestamp name.
+            custom_dirname: Optional custom directory name (replaces auto-generated
+                timestamp-based name). The directory will be created in the standard
+                output directory (../../data/YYYYMMDD/).
 
         Returns:
-            Absolute path to saved xlsx file
+            Absolute path to the output directory (not a file)
         """
         if not self.all_results:
             raise ValueError("No sweep results to save")
@@ -473,27 +481,25 @@ class GUIVNASweepAdapter:
         # Build output directory (same as vna_backend.py default: ../../data/YYYYMMDD/)
         import datetime
         today = datetime.datetime.now().strftime("%Y%m%d")
-        out_dir = os.path.join(_MODULE_DIR, "..", "..", "data", today)
-        os.makedirs(out_dir, exist_ok=True)
+        base_out_dir = os.path.join(_MODULE_DIR, "..", "..", "data", today)
+        os.makedirs(base_out_dir, exist_ok=True)
 
-        if custom_filename:
-            # Save with custom filename directly using save_xlsx's output_dir param
-            xlsx_path = self.sweep.save_xlsx(self.all_results, output_dir=out_dir)
+        # Call save_csv_bundle() which returns the full output directory path
+        bundle_dir = self.sweep.save_csv_bundle(self.all_results, output_dir=base_out_dir)
 
-            # Rename to custom filename (save_xlsx uses auto-generated name)
-            custom_path = os.path.join(out_dir, f"{custom_filename}.xlsx")
+        if custom_dirname:
+            # Rename the auto-generated directory to custom name
+            custom_bundle_dir = os.path.join(base_out_dir, custom_dirname)
             try:
-                if os.path.exists(custom_path):
-                    os.unlink(custom_path)
-                os.rename(xlsx_path, custom_path)
-                xlsx_path = custom_path
+                if os.path.exists(custom_bundle_dir):
+                    shutil.rmtree(custom_bundle_dir)  # Remove old directory if exists
+                os.rename(bundle_dir, custom_bundle_dir)
+                bundle_dir = custom_bundle_dir
             except Exception as exc:
-                logger.warning("Could not rename xlsx to custom name: %s", exc)
+                logger.warning("Could not rename bundle directory to custom name: %s", exc)
                 # Fall back to auto-generated name (already saved)
-        else:
-            xlsx_path = self.sweep.save_xlsx(self.all_results, output_dir=out_dir)
 
-        return xlsx_path
+        return bundle_dir
 
     def stop_lifecycle(self):
         """
