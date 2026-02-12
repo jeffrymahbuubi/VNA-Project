@@ -153,6 +153,7 @@ class SweepResult:
     sweep_times: list  # list[float] wall-clock seconds per sweep
     all_s11_db: list  # list[list[float]] [sweep_idx][point_idx]
     freq_hz: list  # list[float] frequency axis
+    all_timestamps: list = field(default_factory=list)  # list[list[float]] [sweep_idx][point_idx] epoch timestamps
     noise_floor: float = 0.0  # filled by compute_metrics
     trace_jitter: float = 0.0  # filled by compute_metrics
 
@@ -847,38 +848,62 @@ class BaseVNASweep(ABC):
             # blank row after timing
             traces_section_row = col_header_row + 1 + len(r.sweep_times) + 1
 
-            # ==== S11 Traces block ============================================
-            ws.cell(row=traces_section_row, column=1, value="S11 Traces")
-            ws.cell(row=traces_section_row, column=1).font = section_font
+            # ==== S11 Traces block (one block per sweep) =======================
+            # Each sweep block:
+            #   Row 0: section title  "S11 Sweep_{n} Trace"
+            #   Row 1: column headers "Time" | "Frequency (Hz)" | "Magnitude (dB)"
+            #   Rows 2..N+1: data rows
+            #   Row N+2: blank separator
+            # Total rows per block = len(freq_hz) + 3
+            current_row = traces_section_row
+            num_freqs = len(r.freq_hz)
 
-            trace_col_header_row = traces_section_row + 1
-            # Column headers: Frequency (Hz) | Sweep_1 S11 (dB) | ...
-            ws.cell(row=trace_col_header_row, column=1, value="Frequency (Hz)")
-            ws.cell(row=trace_col_header_row, column=1).font = bold_font
-            ws.cell(row=trace_col_header_row, column=1).fill = header_fill
             for s_idx in range(len(r.all_s11_db)):
-                col = 2 + s_idx
+                # Section title
                 ws.cell(
-                    row=trace_col_header_row,
-                    column=col,
-                    value="Sweep_{} S11 (dB)".format(s_idx + 1),
+                    row=current_row, column=1,
+                    value="S11 Sweep_{} Trace".format(s_idx + 1),
                 )
-                ws.cell(row=trace_col_header_row, column=col).font = bold_font
-                ws.cell(row=trace_col_header_row, column=col).fill = header_fill
+                ws.cell(row=current_row, column=1).font = section_font
 
-            # Data rows: one per frequency point
-            for pt_idx, freq in enumerate(r.freq_hz):
-                row = trace_col_header_row + 1 + pt_idx
-                ws.cell(row=row, column=1, value=freq)
-                for s_idx in range(len(r.all_s11_db)):
-                    ws.cell(
-                        row=row,
-                        column=2 + s_idx,
-                        value=round(r.all_s11_db[s_idx][pt_idx], 4),
-                    )
+                # Column headers
+                header_row = current_row + 1
+                for col_idx, hdr in enumerate(
+                    ["Time", "Frequency (Hz)", "Magnitude (dB)"], start=1
+                ):
+                    cell = ws.cell(row=header_row, column=col_idx, value=hdr)
+                    cell.font = bold_font
+                    cell.fill = header_fill
 
-            # blank row after traces
-            metrics_section_row = trace_col_header_row + 1 + len(r.freq_hz) + 1
+                # Data rows
+                sweep_db = r.all_s11_db[s_idx]
+                sweep_ts = (
+                    r.all_timestamps[s_idx]
+                    if s_idx < len(r.all_timestamps)
+                    else []
+                )
+                for pt_idx in range(num_freqs):
+                    data_row = header_row + 1 + pt_idx
+                    # Time column: HH:MM:SS.ffffff from epoch timestamp
+                    if pt_idx < len(sweep_ts):
+                        ts_str = datetime.fromtimestamp(
+                            sweep_ts[pt_idx]
+                        ).strftime("%H:%M:%S.%f")
+                    else:
+                        ts_str = ""
+                    ws.cell(row=data_row, column=1, value=ts_str)
+                    ws.cell(row=data_row, column=2, value=r.freq_hz[pt_idx])
+                    if pt_idx < len(sweep_db):
+                        ws.cell(
+                            row=data_row, column=3,
+                            value=round(sweep_db[pt_idx], 4),
+                        )
+
+                # Advance past data + blank separator row
+                current_row = header_row + 1 + num_freqs + 1
+
+            # metrics_section_row is where the Metrics block starts
+            metrics_section_row = current_row
 
             # ==== Metrics block ===============================================
             ws.cell(row=metrics_section_row, column=1, value="Metrics")
@@ -1085,6 +1110,7 @@ class SingleModeSweep(BaseVNASweep):
 
         sweep_times = []
         all_s11_db = []
+        all_timestamps = []
         freq_hz_axis = []
 
         for i in range(self.num_sweeps):
@@ -1138,6 +1164,19 @@ class SingleModeSweep(BaseVNASweep):
 
             all_s11_db.append(sweep_s11db)
 
+            # -- Interpolated per-point timestamps (Alternative C) --------------
+            # No native per-point timestamps; linearly interpolate between
+            # sweep start and end times.
+            n_pts = len(sweep_freq)
+            if n_pts > 1:
+                sweep_ts = [
+                    t_start + n * ((t_end - t_start) / (n_pts - 1))
+                    for n in range(n_pts)
+                ]
+            else:
+                sweep_ts = [t_start]
+            all_timestamps.append(sweep_ts)
+
             # -- Progress line --------------------------------------------------
             update_rate = 1.0 / sweep_time if sweep_time > 0 else float("inf")
             print(
@@ -1152,6 +1191,7 @@ class SingleModeSweep(BaseVNASweep):
             sweep_times=sweep_times,
             all_s11_db=all_s11_db,
             freq_hz=freq_hz_axis,
+            all_timestamps=all_timestamps,
         )
 
 
@@ -1200,6 +1240,8 @@ class ContinuousModeSweep(BaseVNASweep):
             self.sweep_start_times = []  # list[float]
             self.current_s11 = []  # list[complex], current sweep
             self.all_s11_complex = []  # list[list[complex]], all completed sweeps
+            self.current_timestamps = []  # list[float], per-point epoch timestamps for current sweep
+            self.all_timestamps = []  # list[list[float]], per-point timestamps for all completed sweeps
 
     # -----------------------------------------------------------------------
 
@@ -1276,23 +1318,28 @@ class ContinuousModeSweep(BaseVNASweep):
 
             point_num = data["pointNum"]
             s11_complex = data["measurements"].get("S11", complex(0, 0))
+            point_time = time.time()
 
             with state.lock:
                 if point_num == 0:
-                    state.sweep_start_time = time.time()
+                    state.sweep_start_time = point_time
                     state.current_s11 = []
+                    state.current_timestamps = []
 
                 state.current_s11.append(s11_complex)
+                state.current_timestamps.append(point_time)
 
                 if point_num == state.num_points - 1:
-                    sweep_end = time.time()
+                    sweep_end = point_time
                     collected = list(state.current_s11)
+                    collected_ts = list(state.current_timestamps)
 
                     if len(collected) == state.num_points:
                         # Complete sweep -- save it
                         state.sweep_end_times.append(sweep_end)
                         state.sweep_start_times.append(state.sweep_start_time)
                         state.all_s11_complex.append(collected)
+                        state.all_timestamps.append(collected_ts)
                         state.sweep_count += 1
 
                         if state.sweep_count >= state.num_sweeps:
@@ -1454,6 +1501,7 @@ class ContinuousModeSweep(BaseVNASweep):
         )
 
         all_s11_db = []
+        all_timestamps = []
         sweep_times = []
 
         for i in range(fresh_state.sweep_count):
@@ -1468,6 +1516,7 @@ class ContinuousModeSweep(BaseVNASweep):
                     magnitude = 1e-12
                 s11_db_list.append(20.0 * math.log10(magnitude))
             all_s11_db.append(s11_db_list)
+            all_timestamps.append(fresh_state.all_timestamps[i])
 
         return SweepResult(
             mode="continuous",
@@ -1475,6 +1524,7 @@ class ContinuousModeSweep(BaseVNASweep):
             sweep_times=sweep_times,
             all_s11_db=all_s11_db,
             freq_hz=freq_hz,
+            all_timestamps=all_timestamps,
         )
 
 
