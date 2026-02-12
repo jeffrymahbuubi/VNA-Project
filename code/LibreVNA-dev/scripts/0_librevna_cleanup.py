@@ -102,10 +102,8 @@ def find_librevna_processes() -> list[dict]:
 def find_port_owners() -> dict[int, dict]:
     """Return {port: {pid, state, protocol}} for each LibreVNA port that is
     currently in use."""
-    ports_pattern = "|".join(str(p) for p in LIBREVNA_PORTS)
-    ps_script = (
-        f"netstat -ano | Select-String '({ports_pattern})'"
-    )
+    # Get all netstat output without pre-filtering to avoid false matches
+    ps_script = "netstat -ano"
     raw = run_powershell(ps_script)
     if not raw:
         return {}
@@ -115,10 +113,19 @@ def find_port_owners() -> dict[int, dict]:
         parts = line.split()
         if len(parts) < 5:
             continue
+
+        # Skip header lines
+        if parts[0] not in ("TCP", "UDP"):
+            continue
+
         proto = parts[0]        # TCP or UDP
         local = parts[1]        # e.g. 0.0.0.0:19001
         state = parts[3] if proto == "TCP" else "N/A"
-        pid = int(parts[-1])
+
+        try:
+            pid = int(parts[-1])
+        except ValueError:
+            continue
 
         # Extract port number from local address
         try:
@@ -126,6 +133,7 @@ def find_port_owners() -> dict[int, dict]:
         except (ValueError, IndexError):
             continue
 
+        # Only include ports we care about, first match wins
         if port in LIBREVNA_PORTS and port not in results:
             results[port] = {"pid": pid, "state": state, "protocol": proto}
 
