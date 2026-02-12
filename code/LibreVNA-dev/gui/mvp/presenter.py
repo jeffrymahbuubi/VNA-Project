@@ -6,7 +6,7 @@ All backend operations (SCPI, sweeps) run in background QThreads to keep GUI res
 
 Worker threads:
   - DeviceProbeWorker: Lightweight startup device detection (queries serial)
-  - VNASweepWorker: Full sweep collection lifecycle (GUI + cal + sweeps + xlsx)
+  - VNASweepWorker: Full sweep collection lifecycle (GUI + cal + sweeps + CSV export)
 """
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -69,7 +69,7 @@ class VNASweepWorker(QThread):
     lifecycle_started = Signal(dict)  # Device info: {'serial': ..., 'idn': ...}
     sweep_completed = Signal(int, int, object, object)  # sweep_idx, ifbw_hz, freq, s11_db
     ifbw_completed = Signal(int, dict)  # ifbw_hz, metrics dict
-    all_completed = Signal(str)  # xlsx_file_path
+    all_completed = Signal(str)  # output_directory_path (CSV bundle)
     error_occurred = Signal(str)  # error_message
 
     def __init__(self, config_dict: dict, calibration_file_path: str):
@@ -92,7 +92,7 @@ class VNASweepWorker(QThread):
         Sequence:
           1. Start GUI + connect + load cal
           2. For each IFBW: configure + run sweeps (emit progress signals)
-          3. Save xlsx workbook
+          3. Save CSV bundle
           4. Stop GUI subprocess
         """
         try:
@@ -129,12 +129,12 @@ class VNASweepWorker(QThread):
                 self.ifbw_completed.emit(ifbw_hz, metrics)
                 all_results.append(result)
 
-            # Step 3: Save results to xlsx
+            # Step 3: Save results to CSV bundle
             timestamp = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
-            custom_filename = f"gui_sweep_collection_{timestamp}"
-            xlsx_path = self.adapter.save_results(custom_filename)
+            custom_dirname = f"gui_sweep_collection_{timestamp}"
+            output_dir = self.adapter.save_results(custom_dirname)
 
-            self.all_completed.emit(xlsx_path)
+            self.all_completed.emit(output_dir)
 
         except Exception as e:
             # Emit error signal with full traceback
@@ -671,12 +671,12 @@ class VNAPresenter(QObject):
         self.view.show_status_message(progress_msg, timeout=0)
 
     @Slot(str)
-    def _on_all_completed(self, xlsx_path: str):
+    def _on_all_completed(self, output_dir: str):
         """
-        Called when all sweeps and xlsx export complete.
+        Called when all sweeps and CSV export complete.
 
         Args:
-            xlsx_path: Absolute path to saved workbook
+            output_dir: Absolute path to saved CSV bundle directory
         """
         # Update state
         self._collecting = False
@@ -685,7 +685,7 @@ class VNAPresenter(QObject):
         # Update view
         self.view.set_collecting_state(False)
         self.view.show_status_message(
-            f"Collection complete - Saved: {Path(xlsx_path).name}", timeout=0
+            f"Collection complete - Saved: {Path(output_dir).name}", timeout=0
         )
 
         # Show success dialog
@@ -695,7 +695,10 @@ class VNAPresenter(QObject):
             f"Total sweeps: {stats['total_sweeps']}\n"
             f"Mean sweep time: {stats['mean_time']:.3f} s\n"
             f"Sweep rate: {stats['sweep_rate_hz']:.2f} Hz\n\n"
-            f"Saved to:\n{xlsx_path}"
+            f"Saved to:\n{output_dir}\n\n"
+            f"CSV bundle contains:\n"
+            f"  - s11_sweep_1.csv, s11_sweep_2.csv, ...\n"
+            f"  - summary.txt"
         )
         self.view.show_success_dialog("Collection Complete", message)
 
@@ -843,7 +846,7 @@ class VNAPresenter(QObject):
           - Starting the GUI subprocess (blocking ~5-10s)
           - Running SCPI commands
           - Waiting for streaming callbacks
-          - Saving xlsx output
+          - Saving CSV bundle
 
         Cleanup strategy:
           1. If the worker has an adapter, call stop_lifecycle() to terminate
