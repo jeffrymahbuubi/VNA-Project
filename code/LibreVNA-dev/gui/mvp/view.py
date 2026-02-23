@@ -203,6 +203,31 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             self.pushButton.setEnabled(True)
             self.blink_timer.stop()
 
+    def set_preview_state(self, previewing: bool):
+        """
+        Toggle button appearance for live preview mode.
+
+        When previewing, the button shows "Collect Data" with a blue border
+        hint to indicate that live data is streaming. When not previewing,
+        the button reverts to the standard green ready state.
+
+        Args:
+            previewing: True = live preview active (blue-accent button)
+                       False = standard ready state (green button)
+        """
+        if previewing:
+            self.pushButton.setText("Collect Data")
+            self.pushButton.setStyleSheet(
+                "QPushButton { background-color: rgb(74, 222, 128); "
+                "border-style: solid; border-width: 2px; border-radius: 10px; "
+                "border-color: rgb(56, 189, 248); }\n"
+                "QPushButton:hover { border-color: #2563eb; }"
+            )
+            self.pushButton.setEnabled(True)
+        else:
+            # Revert to standard green ready state
+            self.set_collecting_state(False)
+
     def _toggle_button_blink(self):
         """
         Internal: Alternate button color for pulse animation.
