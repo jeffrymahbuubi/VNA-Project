@@ -184,6 +184,15 @@ def probe_device_serial() -> Dict[str, str]:
         # Fall back to *IDN? serial if DEV:CONN? fails
         dev_serial = idn_serial
 
+    # Explicitly close the SCPI connection before returning.
+    # Without this, the socket lingers until GC runs __del__, which can
+    # race with VNAPreviewWorker opening a new connection on the same port
+    # and cause response misrouting (Root Cause #2 of preview bug).
+    try:
+        vna.close()
+    except Exception:
+        pass
+
     return {
         'serial': dev_serial,
         'idn': idn_raw,
