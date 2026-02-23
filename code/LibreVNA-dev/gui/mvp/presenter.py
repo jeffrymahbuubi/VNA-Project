@@ -6,6 +6,7 @@ All backend operations (SCPI, sweeps) run in background QThreads to keep GUI res
 
 Worker threads:
   - DeviceProbeWorker: Lightweight startup device detection (queries serial)
+  - VNAPreviewWorker: Continuous live sweep for oscilloscope-style preview
   - VNASweepWorker: Full sweep collection lifecycle (GUI + cal + sweeps + CSV export)
 """
 
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import QFileDialog
 from pathlib import Path
 import logging
 import shutil
+import threading
+import time
 import yaml
 import numpy as np
 from typing import Optional
@@ -22,7 +25,12 @@ logger = logging.getLogger(__name__)
 
 from .model import VNADataModel, SweepConfig
 from .view import VNAMainWindow
-from .backend_wrapper import GUIVNASweepAdapter, probe_device_serial
+from .backend_wrapper import (
+    GUIVNASweepAdapter, probe_device_serial,
+    _is_scpi_server_running, _start_gui_subprocess,
+)
+from .vna_backend import SCPI_HOST, SCPI_PORT, STREAMING_PORT, _MODULE_DIR
+from .libreVNA import libreVNA
 
 
 class DeviceProbeWorker(QThread):
@@ -55,6 +63,324 @@ class DeviceProbeWorker(QThread):
             self.serial_detected.emit(device_info)
         except Exception as e:
             self.probe_failed.emit(str(e))
+
+
+class VNAPreviewWorker(QThread):
+    """
+    Background worker for oscilloscope-style live preview.
+
+    Connects to the already-running LibreVNA-GUI subprocess (started during
+    device probe), loads calibration, registers a streaming callback on port
+    19001, and runs continuous sweeps indefinitely until stopped.
+
+    Unlike VNASweepWorker, this worker:
+      - Reuses the existing GUI subprocess (does not spawn a new one)
+      - Runs indefinitely (no sweep count target)
+      - Does NOT save data to disk
+      - Can be stopped gracefully via stop()
+
+    Thread safety: The streaming callback runs on libreVNA's TCP background
+    thread. It emits Qt signals which are delivered to the GUI thread via
+    Qt's cross-thread signal/slot mechanism.
+    """
+
+    # Emitted after each sweep completes (same signature as VNASweepWorker)
+    preview_sweep = Signal(object, object)  # (freq_hz ndarray, s11_db ndarray)
+    preview_started = Signal()               # Preview streaming is active
+    preview_error = Signal(str)              # Non-fatal error message
+    gui_process_changed = Signal(object)     # New subprocess.Popen if GUI was restarted
+
+    def __init__(self, cal_file_path: str):
+        """
+        Initialize preview worker.
+
+        Args:
+            cal_file_path: Calibration filename (resolved relative to _MODULE_DIR)
+        """
+        super().__init__()
+        self.cal_file_path = cal_file_path
+
+        # Populated via SCPI queries after connecting + loading calibration
+        self.start_freq_hz: int = 0
+        self.stop_freq_hz: int = 0
+        self.num_points: int = 0
+
+        self._cancel_event = threading.Event()
+        self._vna: Optional[libreVNA] = None
+        self._stream_callback = None
+
+    def stop(self):
+        """
+        Request graceful shutdown of the preview loop.
+
+        Sets the cancel event which causes the run() loop to exit.
+        Call wait() after this to block until the thread finishes.
+        """
+        self._cancel_event.set()
+
+    def run(self):
+        """
+        Main preview loop - runs in background thread.
+
+        Sequence:
+          1. Connect to SCPI server (already running from probe phase)
+          2. Load calibration
+          3. Check/enable streaming server on port 19001
+          4. Register streaming callback
+          5. Start continuous sweeps (ACQ:SINGLE FALSE + ACQ:RUN)
+          6. Wait until cancel_event is set
+          7. Cleanup: ACQ:STOP, remove callback, close connection
+        """
+        try:
+            # Step 1: Connect to SCPI server
+            try:
+                self._vna = libreVNA(host=SCPI_HOST, port=SCPI_PORT)
+            except Exception as exc:
+                self.preview_error.emit(
+                    f"Preview: cannot connect to SCPI server: {exc}"
+                )
+                return
+
+            if self._cancel_event.is_set():
+                return
+
+            # Step 2: Load calibration
+            try:
+                import os
+                cal_scpi_path = os.path.basename(self.cal_file_path)
+                load_response = self._vna.query(
+                    f":VNA:CAL:LOAD? {cal_scpi_path}"
+                )
+                if load_response != "TRUE":
+                    self.preview_error.emit(
+                        f"Preview: calibration load failed ({load_response})"
+                    )
+                    return
+            except Exception as exc:
+                self.preview_error.emit(
+                    f"Preview: calibration load error: {exc}"
+                )
+                return
+
+            if self._cancel_event.is_set():
+                return
+
+            # Step 2b: Read frequency range directly from the cal file JSON.
+            # LibreVNA SCPI does not expose query forms of FREQuency:START/STOP
+            # or ACQ:POINTS, so we parse the calibration data we already have.
+            try:
+                import json as _json
+                _abs_cal = os.path.join(_MODULE_DIR, os.path.basename(self.cal_file_path))
+                with open(_abs_cal, "r") as _f:
+                    _cal = _json.load(_f)
+                _points = _cal["measurements"][0]["data"]["points"]
+                self.start_freq_hz = int(_points[0]["frequency"])
+                self.stop_freq_hz = int(_points[-1]["frequency"])
+                self.num_points = len(_points)
+                logger.info(
+                    "Preview cal parse: %.3f-%.3f GHz, %d pts",
+                    self.start_freq_hz / 1e9,
+                    self.stop_freq_hz / 1e9,
+                    self.num_points,
+                )
+            except Exception as exc:
+                self.preview_error.emit(
+                    f"Preview: failed to read frequency range from cal file: {exc}"
+                )
+                return
+
+            if self.num_points <= 0:
+                self.preview_error.emit(
+                    "Preview: cal file has zero measurement points"
+                )
+                return
+
+            if self._cancel_event.is_set():
+                return
+
+            # Step 2c: Configure sweep parameters to match the calibration file.
+            # Without this, ACQ:RUN may sweep with default/stale parameters
+            # (wrong num_points or freq range), causing the streaming callback's
+            # point_num boundary check to never fire.
+            try:
+                self._vna.cmd(":VNA:SWEEP FREQUENCY")
+                self._vna.cmd(f":VNA:ACQ:POINTS {self.num_points}")
+                self._vna.cmd(f":VNA:FREQuency:START {self.start_freq_hz}")
+                self._vna.cmd(f":VNA:FREQuency:STOP {self.stop_freq_hz}")
+            except Exception as exc:
+                self.preview_error.emit(
+                    f"Preview: failed to configure sweep parameters: {exc}"
+                )
+                return
+
+            if self._cancel_event.is_set():
+                return
+
+            # Step 3 + 4: Register streaming callback on port 19001.
+            # libreVNA.add_live_callback() raises a generic Exception (not
+            # ConnectionRefusedError) when the streaming port is unreachable,
+            # because it wraps the socket error internally.  Catch Exception.
+            freq_hz = np.linspace(
+                self.start_freq_hz, self.stop_freq_hz, self.num_points
+            )
+            current_sweep = []  # accumulates points for current sweep
+
+            def _preview_callback(data):
+                """Streaming callback - runs on libreVNA TCP thread."""
+                if self._cancel_event.is_set():
+                    return
+                if "Z0" not in data:
+                    return
+
+                point_num = data["pointNum"]
+                s11_complex = data["measurements"].get("S11", complex(0, 0))
+
+                if point_num == 0:
+                    current_sweep.clear()
+
+                current_sweep.append(s11_complex)
+
+                if point_num == self.num_points - 1:
+                    if len(current_sweep) == self.num_points:
+                        # Complete sweep - convert to dB and emit
+                        s11_arr = np.array(current_sweep)
+                        s11_db = 20 * np.log10(
+                            np.maximum(np.abs(s11_arr), 1e-12)
+                        )
+                        # Emit signal (Qt handles thread marshalling)
+                        self.preview_sweep.emit(freq_hz, s11_db)
+
+            self._stream_callback = _preview_callback
+
+            try:
+                self._vna.add_live_callback(
+                    STREAMING_PORT, self._stream_callback
+                )
+            except Exception:
+                # Streaming server not enabled -- enable it now.
+                # libreVNA.add_live_callback wraps socket errors in a generic
+                # Exception, so we catch Exception (not ConnectionRefusedError).
+                # This will kill the GUI subprocess (APPLYPREFERENCES restarts it).
+                logger.info("Preview: enabling streaming server (will restart GUI)")
+                try:
+                    self._vna.cmd(
+                        ":DEV:PREF StreamingServers.VNACalibratedData.enabled true",
+                        check=False,
+                    )
+                    self._vna.cmd(":DEV:APPLYPREFERENCES", check=False)
+                except Exception:
+                    pass  # GUI may have died already
+
+                # Wait for GUI to die
+                time.sleep(2)
+
+                # Close stale connection
+                try:
+                    self._vna.close()
+                except Exception:
+                    pass
+                self._vna = None
+
+                if self._cancel_event.is_set():
+                    return
+
+                # Restart GUI subprocess
+                try:
+                    new_proc = _start_gui_subprocess()
+                    self.gui_process_changed.emit(new_proc)
+                except Exception as exc:
+                    self.preview_error.emit(
+                        f"Preview: failed to restart GUI after enabling streaming: {exc}"
+                    )
+                    return
+
+                if self._cancel_event.is_set():
+                    return
+
+                # Reconnect
+                try:
+                    self._vna = libreVNA(host=SCPI_HOST, port=SCPI_PORT)
+                except Exception as exc:
+                    self.preview_error.emit(
+                        f"Preview: reconnect after streaming enable failed: {exc}"
+                    )
+                    return
+
+                # Reload calibration
+                try:
+                    load_response = self._vna.query(
+                        f":VNA:CAL:LOAD? {cal_scpi_path}"
+                    )
+                    if load_response != "TRUE":
+                        self.preview_error.emit(
+                            f"Preview: calibration reload failed ({load_response})"
+                        )
+                        return
+                except Exception as exc:
+                    self.preview_error.emit(
+                        f"Preview: calibration reload error: {exc}"
+                    )
+                    return
+
+                # Register callback on the now-enabled streaming port
+                try:
+                    self._vna.add_live_callback(
+                        STREAMING_PORT, self._stream_callback
+                    )
+                except Exception as exc:
+                    self.preview_error.emit(
+                        f"Preview: streaming callback registration failed: {exc}"
+                    )
+                    return
+
+            if self._cancel_event.is_set():
+                return
+
+            # Step 5: Configure and start continuous sweeps
+            self._vna.cmd(":VNA:ACQ:STOP")
+            self._vna.cmd(":VNA:ACQ:SINGLE FALSE")
+            self._vna.cmd(":VNA:ACQ:RUN")
+
+            # Signal that preview is active
+            self.preview_started.emit()
+
+            # Step 6: Wait until cancelled
+            # Poll cancel_event with short timeout to stay responsive
+            while not self._cancel_event.wait(timeout=0.25):
+                pass
+
+        except Exception as exc:
+            import traceback
+            self.preview_error.emit(
+                f"Preview error: {exc}\n{traceback.format_exc()}"
+            )
+
+        finally:
+            # Step 7: Cleanup
+            self._cleanup()
+
+    def _cleanup(self):
+        """Stop acquisition and close connections."""
+        if self._vna is not None:
+            try:
+                self._vna.cmd(":VNA:ACQ:STOP")
+            except Exception:
+                pass
+
+            if self._stream_callback is not None:
+                try:
+                    self._vna.remove_live_callback(
+                        STREAMING_PORT, self._stream_callback
+                    )
+                except Exception:
+                    pass
+                self._stream_callback = None
+
+            try:
+                self._vna.close()
+            except Exception:
+                pass
+            self._vna = None
 
 
 class VNASweepWorker(QThread):
@@ -175,10 +501,15 @@ class VNAPresenter(QObject):
         # Worker thread state
         self._worker: Optional[VNASweepWorker] = None
         self._collecting = False
+        self._recording = False  # True only during data collection (not preview)
 
         # Device probe worker state
         self._probe_worker: Optional[DeviceProbeWorker] = None
         self._gui_process = None  # Subprocess handle if GUI was started by probe
+
+        # Preview worker state
+        self._preview_worker: Optional[VNAPreviewWorker] = None
+        self._previewing = False  # True when live preview is active
 
         # Current collection state
         self._current_ifbw_index = 0
@@ -362,6 +693,9 @@ class VNAPresenter(QObject):
         # Update button state (device is now known)
         self._update_collect_button_state()
 
+        # Start live preview automatically after device detection
+        self._start_preview()
+
     @Slot(str)
     def _on_probe_failed(self, error_message: str):
         """
@@ -421,6 +755,162 @@ class VNAPresenter(QObject):
             self._gui_process = None
 
     # -----------------------------------------------------------------------
+    # Live Preview (oscilloscope-style continuous sweep before collection)
+    # -----------------------------------------------------------------------
+
+    def _start_preview(self):
+        """
+        Launch VNAPreviewWorker for live sweep visualization.
+
+        Called automatically after device detection succeeds. The preview
+        runs continuous sweeps and updates the plot in real time WITHOUT
+        saving data. It stops when the user presses 'Collect Data' or
+        when the window closes.
+
+        Prerequisites:
+          - Device connected (gui_process running, SCPI server available)
+          - Calibration file loaded in model
+          (Frequency range and num_points are queried via SCPI by the worker)
+        """
+        # Guard: don't start preview during collection
+        if self._collecting:
+            return
+
+        # Guard: don't start if already previewing
+        if self._preview_worker is not None and self._preview_worker.isRunning():
+            return
+
+        # Guard: need calibration loaded (freq range will be queried via SCPI)
+        if not self.model.calibration.loaded or not self.model.calibration.file_path:
+            logger.info("Preview skipped: no calibration loaded")
+            return
+
+        logger.info(
+            "Starting live preview (cal=%s)",
+            self.model.calibration.file_path,
+        )
+
+        # Create and configure preview worker.
+        # Frequency range and num_points are queried via SCPI after connecting,
+        # so we do NOT require them to be populated in the model config here.
+        self._preview_worker = VNAPreviewWorker(
+            cal_file_path=self.model.calibration.file_path,
+        )
+
+        # Connect preview signals
+        self._preview_worker.preview_sweep.connect(self._on_preview_sweep)
+        self._preview_worker.preview_started.connect(self._on_preview_started)
+        self._preview_worker.preview_error.connect(self._on_preview_error)
+        self._preview_worker.gui_process_changed.connect(
+            self._on_preview_gui_changed
+        )
+
+        # Start the worker thread
+        self._preview_worker.start()
+        self.view.show_status_message("Starting live preview...", timeout=0)
+
+    def _stop_preview_worker(self):
+        """
+        Gracefully stop the VNAPreviewWorker if it is running.
+
+        Sets the cancel event, waits up to 5 seconds for the thread to
+        finish, then force-terminates if it did not stop in time.
+
+        Safe to call when no preview is active (no-op).
+        """
+        if self._preview_worker is None:
+            return
+
+        if self._preview_worker.isRunning():
+            logger.info("Stopping preview worker...")
+
+            # Disconnect signals to prevent stale callbacks
+            try:
+                self._preview_worker.preview_sweep.disconnect(
+                    self._on_preview_sweep
+                )
+                self._preview_worker.preview_started.disconnect(
+                    self._on_preview_started
+                )
+                self._preview_worker.preview_error.disconnect(
+                    self._on_preview_error
+                )
+                self._preview_worker.gui_process_changed.disconnect(
+                    self._on_preview_gui_changed
+                )
+            except (RuntimeError, TypeError):
+                pass  # Signals already disconnected
+
+            # Request graceful shutdown
+            self._preview_worker.stop()
+
+            # Wait for thread to finish
+            if not self._preview_worker.wait(5000):
+                logger.warning("Preview worker did not stop in 5s -- terminating")
+                self._preview_worker.terminate()
+                self._preview_worker.wait(2000)
+
+            logger.info("Preview worker stopped")
+
+        self._preview_worker = None
+        self._previewing = False
+
+    @Slot(object, object)
+    def _on_preview_sweep(self, freq: np.ndarray, s11_db: np.ndarray):
+        """
+        Handle a preview sweep completion (live plot update only).
+
+        Called from the preview worker's streaming callback via Qt signal.
+        Updates the plot without saving data to the model.
+
+        Args:
+            freq: Frequency array in Hz
+            s11_db: S11 magnitude in dB
+        """
+        self.view.update_plot(freq, s11_db)
+
+    @Slot()
+    def _on_preview_started(self):
+        """Handle notification that preview streaming is active."""
+        self._previewing = True
+        self.view.set_preview_state(True)
+        self.view.show_status_message(
+            "Live Preview -- Press 'Collect Data' to record", timeout=0
+        )
+
+    @Slot(str)
+    def _on_preview_error(self, error_message: str):
+        """
+        Handle preview worker error.
+
+        Preview errors are non-fatal -- they just mean live preview is
+        unavailable. The user can still click 'Collect Data'.
+
+        Args:
+            error_message: Description of the preview error
+        """
+        logger.warning("Preview error: %s", error_message)
+        self._previewing = False
+        self.view.set_preview_state(False)
+        self.view.show_status_message(
+            f"Live preview unavailable: {error_message}", timeout=10000
+        )
+
+    @Slot(object)
+    def _on_preview_gui_changed(self, new_process):
+        """
+        Handle GUI subprocess restart by preview worker.
+
+        When the preview worker enables the streaming server, the GUI
+        subprocess dies and is restarted. This slot updates the presenter's
+        gui_process reference so cleanup works correctly.
+
+        Args:
+            new_process: New subprocess.Popen handle
+        """
+        self._gui_process = new_process
+
+    # -----------------------------------------------------------------------
     # User Actions
     # -----------------------------------------------------------------------
 
@@ -429,6 +919,11 @@ class VNAPresenter(QObject):
         """Handle 'Collect Data' button click."""
         if self._collecting:
             return  # Already running
+
+        # Stop the live preview worker before starting collection.
+        # The preview holds an SCPI connection and streaming callback that
+        # would conflict with the VNASweepWorker's own connections.
+        self._stop_preview_worker()
 
         # Stop any GUI subprocess started by the device probe to avoid port
         # conflicts -- the VNASweepWorker starts its own GUI subprocess on
@@ -488,6 +983,7 @@ class VNAPresenter(QObject):
 
         # Update UI state
         self._collecting = True
+        self._recording = True
         self._current_ifbw_index = 0
         self._total_ifbw_count = len(config.ifbw_values)
         self.view.set_collecting_state(True)
@@ -629,26 +1125,32 @@ class VNAPresenter(QObject):
         """
         Called after each sweep completes (real-time update).
 
+        When recording (during data collection), saves data to model and
+        shows sweep progress. When not recording (preview mode), only
+        updates the plot without saving data.
+
         Args:
             sweep_idx: Sequential sweep number (0-based)
             ifbw_hz: Current IFBW value
             freq: Frequency array
             s11_db: S11 magnitude in dB
         """
-        # Update model
-        self.model.add_sweep_data(sweep_idx, ifbw_hz, freq, s11_db)
+        # Only save data to model during active recording (not preview)
+        if self._recording:
+            self.model.add_sweep_data(sweep_idx, ifbw_hz, freq, s11_db)
 
-        # Update plot (overwrite with latest sweep)
+        # Always update plot (both preview and recording modes)
         self.view.update_plot(freq, s11_db)
 
-        # Update status
-        ifbw_khz = ifbw_hz // 1000
-        progress = (
-            f"IFBW {ifbw_khz} kHz - "
-            f"Sweep {sweep_idx + 1}/{self.model.config.num_sweeps}"
-        )
-        self.view.show_status_message(progress, timeout=0)
-        self.view.update_progress_label(progress)
+        # Update status based on mode
+        if self._recording:
+            ifbw_khz = ifbw_hz // 1000
+            progress = (
+                f"IFBW {ifbw_khz} kHz - "
+                f"Sweep {sweep_idx + 1}/{self.model.config.num_sweeps}"
+            )
+            self.view.show_status_message(progress, timeout=0)
+            self.view.update_progress_label(progress)
 
     @Slot(int, dict)
     def _on_ifbw_completed(self, ifbw_hz: int, metrics: dict):
@@ -675,11 +1177,15 @@ class VNAPresenter(QObject):
         """
         Called when all sweeps and CSV export complete.
 
+        Resets collection state and re-probes the device, which will
+        automatically restart the live preview via _on_serial_detected().
+
         Args:
             output_dir: Absolute path to saved CSV bundle directory
         """
         # Update state
         self._collecting = False
+        self._recording = False
         self.model.device.connected = False
 
         # Update view
@@ -718,6 +1224,7 @@ class VNAPresenter(QObject):
         """
         # Update state
         self._collecting = False
+        self._recording = False
         self.model.device.connected = False
 
         # Update view
@@ -785,9 +1292,10 @@ class VNAPresenter(QObject):
         Stop all background operations and release resources before shutdown.
 
         Cleanup sequence (order matters for avoiding port conflicts):
-          1. Stop DeviceProbeWorker (if running)
-          2. Stop VNASweepWorker and its adapter (if collecting)
-          3. Terminate GUI subprocess started by device probe (if any)
+          1. Stop VNAPreviewWorker (if previewing)
+          2. Stop DeviceProbeWorker (if running)
+          3. Stop VNASweepWorker and its adapter (if collecting)
+          4. Terminate GUI subprocess started by device probe (if any)
 
         Each step uses graceful shutdown (quit+wait) with a timeout,
         falling back to forced termination if the timeout expires.
@@ -798,13 +1306,16 @@ class VNAPresenter(QObject):
 
         Safe to call multiple times (idempotent).
         """
-        # Step 1: Stop device probe worker thread
+        # Step 1: Stop preview worker (holds SCPI + streaming connections)
+        self._stop_preview_worker()
+
+        # Step 2: Stop device probe worker thread
         self._stop_probe_worker()
 
-        # Step 2: Stop sweep worker thread (and its adapter subprocess)
+        # Step 3: Stop sweep worker thread (and its adapter subprocess)
         self._stop_sweep_worker()
 
-        # Step 3: Terminate probe GUI subprocess (started during detection)
+        # Step 4: Terminate probe GUI subprocess (started during detection)
         self._stop_probe_gui_process()
 
         logger.info("Cleanup complete")
