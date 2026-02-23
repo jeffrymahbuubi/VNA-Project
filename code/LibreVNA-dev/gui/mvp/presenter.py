@@ -702,8 +702,11 @@ class VNAPresenter(QObject):
         )
         self.view.show_success_dialog("Collection Complete", message)
 
-        # Update button state
-        self._update_collect_button_state()
+        # Re-probe the device so that device.connected is restored and the
+        # Collect Data button becomes enabled again for subsequent runs.
+        # The VNASweepWorker's stop_lifecycle() terminated the GUI subprocess,
+        # so we need a fresh probe to re-establish the SCPI connection.
+        self._start_device_probe()
 
     @Slot(str)
     def _on_error(self, error_message: str):
@@ -726,8 +729,9 @@ class VNAPresenter(QObject):
         # Show error dialog
         self.view.show_error_dialog("Collection Error", error_message)
 
-        # Update button state
-        self._update_collect_button_state()
+        # Re-probe the device so that device.connected is restored and the
+        # Collect Data button becomes enabled again for subsequent runs.
+        self._start_device_probe()
 
     # -----------------------------------------------------------------------
     # Button State Machine
@@ -737,16 +741,18 @@ class VNAPresenter(QObject):
         """
         Update collect button enabled/disabled state.
 
-        Button is enabled when:
+        Button is enabled when ALL conditions are met:
+          - Device connected (detected via DeviceProbeWorker)
           - Calibration loaded
           - Config valid
           - NOT currently collecting
 
-        Note: Device is NOT connected before collection starts (the worker
-        thread handles the GUI subprocess). So we enable the button based
-        on calibration + config only.
+        The button stays greyed out with a "Not Ready" label until the
+        device probe succeeds. This prevents the user from clicking
+        "Collect Data" before the device is fully initialized.
         """
         ready = (
+            self.model.device.connected and
             self.model.calibration.loaded and
             self.model.config.is_valid() and
             not self._collecting
