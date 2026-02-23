@@ -30,14 +30,14 @@ from .libreVNA import libreVNA
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# OS-dependent GUI binary path
+# OS-dependent GUI binary path (tools co-located under gui/tools/)
 if platform.system() == "Windows":
     GUI_BINARY = os.path.normpath(
-        os.path.join(_MODULE_DIR, "..", "..", "tools", "LibreVNA-GUI", "release", "LibreVNA-GUI.exe")
+        os.path.join(_MODULE_DIR, "..", "tools", "LibreVNA-GUI.exe")
     )
 else:
     GUI_BINARY = os.path.normpath(
-        os.path.join(_MODULE_DIR, "..", "..", "tools", "LibreVNA-GUI")
+        os.path.join(_MODULE_DIR, "..", "tools", "LibreVNA-GUI")
     )
 
 # SCPI connection
