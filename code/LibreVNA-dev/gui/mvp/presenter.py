@@ -1048,6 +1048,12 @@ class VNAPresenter(QObject):
             self.view.show_status_message(f"Loaded: {source.name}")
             self._update_collect_button_state()
 
+            # Restart preview worker so it picks up the new cal file
+            if (self._preview_worker is not None
+                    and self._preview_worker.isRunning()):
+                self._stop_preview_worker()
+                self._start_preview()
+
     @Slot()
     def _on_load_config_requested(self):
         """Handle 'Load Config' menu action."""
