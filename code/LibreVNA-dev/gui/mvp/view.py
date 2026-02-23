@@ -32,9 +32,13 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
     collect_data_requested = Signal()
     load_calibration_requested = Signal()
     load_config_requested = Signal()
-    connect_device_requested = Signal()  # Emitted when user clicks Device > Connect to > serial action
+    connect_device_requested = (
+        Signal()
+    )  # Emitted when user clicks Device > Connect to > serial action
     config_changed = Signal()  # Emitted when user edits any config widget
-    window_closing = Signal()  # Emitted when user closes the window (X button, Alt+F4, etc.)
+    window_closing = (
+        Signal()
+    )  # Emitted when user closes the window (X button, Alt+F4, etc.)
 
     def __init__(self):
         """
@@ -88,8 +92,8 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         # Create pyqtgraph PlotWidget
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setObjectName("s11TracePlot")  # Preserve name
-        self.plot_widget.setLabel('left', 'S11 Magnitude', units='dB')
-        self.plot_widget.setLabel('bottom', 'Frequency', units='Hz')
+        self.plot_widget.setLabel("left", "S11 Magnitude", units="dB")
+        self.plot_widget.setLabel("bottom", "Frequency", units="Hz")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         # Enable dynamic Y-axis auto-ranging with 5% padding so traces
         # don't touch the plot edges.  The X-axis stays manual (set by
@@ -100,9 +104,7 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
 
         # Create plot data item (yellow pen for S11 trace)
         self.plot_data_item = self.plot_widget.plot(
-            [], [],
-            pen=pg.mkPen(color='y', width=2),
-            name='S11'
+            [], [], pen=pg.mkPen(color="y", width=2), name="S11"
         )
 
         # Add to layout
@@ -125,12 +127,8 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         self.pushButton.clicked.connect(self.collect_data_requested.emit)
 
         # Menu actions (these exist in the .ui file)
-        self.actionLoad.triggered.connect(
-            self.load_calibration_requested.emit
-        )
-        self.actionLoad_yaml_config.triggered.connect(
-            self.load_config_requested.emit
-        )
+        self.actionLoad.triggered.connect(self.load_calibration_requested.emit)
+        self.actionLoad_yaml_config.triggered.connect(self.load_config_requested.emit)
         self.actionSerial_LibreVNA_USB.triggered.connect(
             self.connect_device_requested.emit
         )
@@ -184,7 +182,7 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         layout shifts and the button "disappearing" during collection.
         """
         if collecting:
-            self.pushButton.setText("Collecting Data...")
+            self.pushButton.setText("Collecting \nData...")
             self.pushButton.setStyleSheet(
                 "QPushButton { background-color: rgb(239, 68, 68); "
                 "border-style: solid; border-width: 2px; border-radius: 10px; "
@@ -274,15 +272,15 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             config: Dictionary with keys matching SweepConfig fields
         """
         # Frequency settings
-        if 'start_frequency' in config:
-            self.startFrequencyLineEdit.setText(str(config['start_frequency']))
+        if "start_frequency" in config:
+            self.startFrequencyLineEdit.setText(str(config["start_frequency"]))
 
-        if 'stop_frequency' in config:
-            self.stopFrequencyLineEdit.setText(str(config['stop_frequency']))
+        if "stop_frequency" in config:
+            self.stopFrequencyLineEdit.setText(str(config["stop_frequency"]))
 
         # Compute and populate center and span
-        start = config.get('start_frequency', 0)
-        stop = config.get('stop_frequency', 0)
+        start = config.get("start_frequency", 0)
+        stop = config.get("stop_frequency", 0)
         if start and stop:
             center = (start + stop) // 2
             span = stop - start
@@ -290,18 +288,18 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             self.spanFrequencyLineEdit.setText(str(span))
 
         # Acquisition settings
-        if 'num_points' in config:
-            self.pointsLineEdit.setText(str(config['num_points']))
+        if "num_points" in config:
+            self.pointsLineEdit.setText(str(config["num_points"]))
 
-        if 'stim_lvl_dbm' in config:
-            self.levelLineEdit.setText(str(config['stim_lvl_dbm']))
+        if "stim_lvl_dbm" in config:
+            self.levelLineEdit.setText(str(config["stim_lvl_dbm"]))
 
-        if 'num_sweeps' in config:
-            self.numberOfSweepLineEdit.setText(str(config['num_sweeps']))
+        if "num_sweeps" in config:
+            self.numberOfSweepLineEdit.setText(str(config["num_sweeps"]))
 
         # IFBW values (list -> comma-separated string)
-        if 'ifbw_values' in config:
-            ifbw_str = ', '.join(str(v) for v in config['ifbw_values'])
+        if "ifbw_values" in config:
+            ifbw_str = ", ".join(str(v) for v in config["ifbw_values"])
             self.ifbwFrequencyLineEdit.setText(ifbw_str)
 
     def read_sweep_config(self) -> dict:
@@ -317,7 +315,7 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         ifbw_values = []
         if ifbw_text:
             try:
-                ifbw_values = [int(v.strip()) for v in ifbw_text.split(',')]
+                ifbw_values = [int(v.strip()) for v in ifbw_text.split(",")]
             except ValueError:
                 ifbw_values = []
 
@@ -347,13 +345,13 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             num_sweeps = 0
 
         return {
-            'start_frequency': start_freq,
-            'stop_frequency': stop_freq,
-            'num_points': num_points,
-            'stim_lvl_dbm': stim_lvl,
-            'avg_count': 1,  # No widget in UI, use default
-            'num_sweeps': num_sweeps,
-            'ifbw_values': ifbw_values,
+            "start_frequency": start_freq,
+            "stop_frequency": stop_freq,
+            "num_points": num_points,
+            "stim_lvl_dbm": stim_lvl,
+            "avg_count": 1,  # No widget in UI, use default
+            "num_sweeps": num_sweeps,
+            "ifbw_values": ifbw_values,
         }
 
     def set_device_serial(self, serial: str):
