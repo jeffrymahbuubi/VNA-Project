@@ -1,6 +1,7 @@
 .env
 code/LibreVNA-source
 code/LibreVNA-dev/tools/LibreVNA-GUI
+code/LibreVNA-dev/gui/tools
 .mcp.json
 software
 reports
