@@ -39,6 +39,7 @@ class SweepConfig:
     avg_count: int = 1
     num_sweeps: int = 30
     ifbw_values: List[int] = field(default_factory=lambda: [50000, 10000, 1000])  # Hz
+    ifbw_live: int = 50000  # Hz — IFBW for live-preview sweep
 
     @property
     def center_frequency(self) -> int:
@@ -74,6 +75,7 @@ class SweepConfig:
             "avg_count": self.avg_count,
             "num_sweeps": self.num_sweeps,
             "ifbw_values": self.ifbw_values,
+            "ifbw_live": self.ifbw_live,
         }
 
     @classmethod
@@ -104,6 +106,7 @@ class SweepConfig:
             avg_count=config.get("avg_count", 1),
             num_sweeps=config.get("num_sweeps", 30),
             ifbw_values=ifbw_values,
+            ifbw_live=config.get("ifbw_live", 50000),
         )
 
     def update_from_cal_file(self, cal_file_path: str) -> None:
