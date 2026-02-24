@@ -27,4 +27,5 @@ dependencies = [
     "scipy>=1.15.3",
     "seaborn>=0.13.2",
     "setuptools>=82.0.0",
+    "upskill>=0.1.0",
 ]
