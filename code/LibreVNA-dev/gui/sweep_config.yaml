@@ -8,6 +8,7 @@ configurations:
   stim_lvl_dbm: -10
   avg_count: 1
   num_sweeps: 30                   # sweeps per IFBW value
+  ifbw_live: 50000                 # IFBW (Hz) for live-preview sweep
 
 target:
   ifbw_values:                     # single int OR list of ints in Hz
