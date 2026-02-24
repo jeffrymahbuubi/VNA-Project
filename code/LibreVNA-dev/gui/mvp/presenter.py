@@ -90,15 +90,17 @@ class VNAPreviewWorker(QThread):
     preview_error = Signal(str)              # Non-fatal error message
     gui_process_changed = Signal(object)     # New subprocess.Popen if GUI was restarted
 
-    def __init__(self, cal_file_path: str):
+    def __init__(self, cal_file_path: str, ifbw_hz: int = 50000):
         """
         Initialize preview worker.
 
         Args:
             cal_file_path: Calibration filename (resolved relative to _MODULE_DIR)
+            ifbw_hz: IF bandwidth in Hz for the live-preview sweep (default 50000)
         """
         super().__init__()
         self.cal_file_path = cal_file_path
+        self.ifbw_hz = ifbw_hz
 
         # Populated via SCPI queries after connecting + loading calibration
         self.start_freq_hz: int = 0
@@ -207,6 +209,7 @@ class VNAPreviewWorker(QThread):
                 self._vna.cmd(f":VNA:ACQ:POINTS {self.num_points}")
                 self._vna.cmd(f":VNA:FREQuency:START {self.start_freq_hz}")
                 self._vna.cmd(f":VNA:FREQuency:STOP {self.stop_freq_hz}")
+                self._vna.cmd(f":VNA:ACQ:IFBW {self.ifbw_hz}")
             except Exception as exc:
                 self.preview_error.emit(
                     f"Preview: failed to configure sweep parameters: {exc}"
@@ -795,6 +798,7 @@ class VNAPresenter(QObject):
         # so we do NOT require them to be populated in the model config here.
         self._preview_worker = VNAPreviewWorker(
             cal_file_path=self.model.calibration.file_path,
+            ifbw_hz=self.model.config.ifbw_live,
         )
 
         # Connect preview signals
