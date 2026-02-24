@@ -1,0 +1,6 @@
+skill_generation_model: sonnet   # Default skill generation model
+eval_model: haiku               # Default evaluation model (optional)
+test_gen_model: null            # Optional test generation model
+skills_dir: .claude/skills
+runs_dir: .claude/upskill-runs  # Where to save run logs
+max_refine_attempts: 3          # Refinement iterations
