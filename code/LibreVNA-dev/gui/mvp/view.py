@@ -8,7 +8,23 @@ Uses the auto-generated main_window.py (from pyside6-uic) via multiple
 inheritance so that all widget attributes are directly accessible as self.xxx.
 """
 
-from PySide6.QtWidgets import QMainWindow, QMessageBox
+import math
+
+from PySide6.QtWidgets import (
+    QMainWindow,
+    QMessageBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QSpinBox,
+    QCheckBox,
+    QGroupBox,
+    QHBoxLayout,
+    QVBoxLayout,
+    QGridLayout,
+    QLabel,
+    QMenu,
+)
 from PySide6.QtCore import Signal, QTimer
 from PySide6.QtGui import QIcon, QCloseEvent
 import pyqtgraph as pg
@@ -17,6 +33,262 @@ from pathlib import Path
 from typing import Optional
 
 from .main_window import Ui_MainWindow
+
+
+class _MHzAxisItem(pg.AxisItem):
+    """X-axis: formats Hz values as '200MHz', '210MHz', etc.
+
+    Disables the painter clip during paint() so that tick labels at the
+    axis edges (e.g. '200MHz' at left, '250MHz' at right) are not
+    scissored by the item boundary when viewport X-padding is zero.
+    """
+
+    def tickStrings(self, values, scale, spacing):
+        return [f"{v / 1e6:.0f}MHz" for v in values]
+
+    def paint(self, p, opt, widget):
+        p.save()
+        p.setClipping(False)
+        super().paint(p, opt, widget)
+        p.restore()
+
+
+class _dBAxisItem(pg.AxisItem):
+    """Y-axis: formats dB values as '20dB', '-10dB', etc."""
+
+    def tickStrings(self, values, scale, spacing):
+        return [f"{v:.0f}dB" for v in values]
+
+
+def _nice_step(max_val: float, min_val: float, target_divisions: int = 7) -> float:
+    """Return a 'nice' round tick step for the given range.
+
+    Selects from preferred multipliers (1, 2, 5, 10) at the appropriate
+    order of magnitude so that the number of divisions stays close to
+    *target_divisions*.
+    """
+    span = abs(max_val - min_val)
+    if span == 0:
+        return 1.0
+    raw_step = span / target_divisions
+    magnitude = 10 ** math.floor(math.log10(raw_step))
+    for multiplier in (1, 2, 5, 10):
+        step = magnitude * multiplier
+        if span / step <= target_divisions * 1.5:
+            return step
+    return magnitude * 10
+
+
+def _frange(start: float, stop: float, step: float):
+    """Generate float range from *start* to *stop* (inclusive) with *step*.
+
+    Works for both positive and negative step values.
+    """
+    values = []
+    v = start
+    if step < 0:
+        while v >= stop - 1e-9:
+            values.append(round(v, 10))
+            v += step
+    else:
+        while v <= stop + 1e-9:
+            values.append(round(v, 10))
+            v += step
+    return values
+
+
+class _VNAPlotWidget(pg.PlotWidget):
+    """PlotWidget subclass that replaces pyqtgraph's built-in right-click
+    menu with a single "Axis Setup" action.
+
+    The ``_on_axis_setup`` callback is assigned after construction by
+    ``VNAMainWindow._setup_plot_widget``.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Disable pyqtgraph's default context menu
+        self.getViewBox().setMenuEnabled(False)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        menu.addAction("Axis Setup", self._on_axis_setup)
+        menu.exec(event.globalPos())
+
+    def _on_axis_setup(self):
+        """Placeholder -- monkey-patched by VNAMainWindow after creation."""
+        pass
+
+
+# ---------------------------------------------------------------------------
+# AxisSetupDialog
+# ---------------------------------------------------------------------------
+
+
+class AxisSetupDialog(QDialog):
+    """Modal dialog for configuring Y-axis and X-axis range and tick divisions.
+
+    Layout mirrors the official LibreVNA-GUI "Axis Setup" dialog but omits
+    the secondary Y-axis column (not needed for single-trace S11 plotting).
+    """
+
+    def __init__(
+        self,
+        y_max: float,
+        y_min: float,
+        y_divisions: int,
+        y_auto_div: bool,
+        x_max_hz: float,
+        x_min_hz: float,
+        x_divisions: int,
+        x_auto_div: bool,
+        x_auto_range: bool,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Axis Setup")
+        self.setMinimumWidth(550)
+
+        # --- Primary Y Axis group box ---
+        y_group = QGroupBox("Primary Y Axis")
+        y_layout = QGridLayout()
+
+        y_layout.addWidget(QLabel("Type:"), 0, 0)
+        y_layout.addWidget(QLabel("Magnitude"), 0, 1)
+
+        y_layout.addWidget(QLabel("Range:"), 1, 0)
+
+        y_layout.addWidget(QLabel("Maximum:"), 2, 0)
+        self.y_max_spin = QDoubleSpinBox()
+        self.y_max_spin.setRange(-200.0, 200.0)
+        self.y_max_spin.setDecimals(1)
+        self.y_max_spin.setSuffix(" dB")
+        self.y_max_spin.setValue(y_max)
+        y_layout.addWidget(self.y_max_spin, 2, 1)
+
+        y_layout.addWidget(QLabel("Minimum:"), 3, 0)
+        self.y_min_spin = QDoubleSpinBox()
+        self.y_min_spin.setRange(-200.0, 200.0)
+        self.y_min_spin.setDecimals(1)
+        self.y_min_spin.setSuffix(" dB")
+        self.y_min_spin.setValue(y_min)
+        y_layout.addWidget(self.y_min_spin, 3, 1)
+
+        y_div_row = QHBoxLayout()
+        y_layout.addWidget(QLabel("# Divisions:"), 4, 0)
+        self.y_div_spin = QSpinBox()
+        self.y_div_spin.setRange(1, 100)
+        self.y_div_spin.setValue(y_divisions)
+        y_div_row.addWidget(self.y_div_spin)
+        self.y_auto_div_cb = QCheckBox("Auto")
+        self.y_auto_div_cb.setChecked(y_auto_div)
+        y_div_row.addWidget(self.y_auto_div_cb)
+        y_layout.addLayout(y_div_row, 4, 1)
+
+        # Wire auto-div checkbox to disable/enable the spinbox
+        self.y_auto_div_cb.toggled.connect(
+            lambda checked: self.y_div_spin.setEnabled(not checked)
+        )
+        self.y_div_spin.setEnabled(not y_auto_div)
+
+        y_group.setLayout(y_layout)
+
+        # --- X Axis group box ---
+        x_group = QGroupBox("X Axis")
+        x_layout = QGridLayout()
+
+        x_layout.addWidget(QLabel("Type:"), 0, 0)
+        x_layout.addWidget(QLabel("Frequency"), 0, 1)
+
+        # Range row with Auto checkbox and "Use Span" label
+        x_range_row = QHBoxLayout()
+        x_layout.addWidget(QLabel("Range:"), 1, 0)
+        self.x_auto_range_cb = QCheckBox("Auto")
+        self.x_auto_range_cb.setChecked(x_auto_range)
+        x_range_row.addWidget(self.x_auto_range_cb)
+        self._use_span_label = QLabel("Use Span")
+        self._use_span_label.setEnabled(False)  # Always greyed, informational
+        x_range_row.addWidget(self._use_span_label)
+        x_range_row.addStretch()
+        x_layout.addLayout(x_range_row, 1, 1)
+
+        x_layout.addWidget(QLabel("Maximum:"), 2, 0)
+        self.x_max_spin = QDoubleSpinBox()
+        self.x_max_spin.setRange(0.0, 100000.0)
+        self.x_max_spin.setDecimals(3)
+        self.x_max_spin.setSuffix(" MHz")
+        self.x_max_spin.setValue(x_max_hz / 1e6)
+        x_layout.addWidget(self.x_max_spin, 2, 1)
+
+        x_layout.addWidget(QLabel("Minimum:"), 3, 0)
+        self.x_min_spin = QDoubleSpinBox()
+        self.x_min_spin.setRange(0.0, 100000.0)
+        self.x_min_spin.setDecimals(3)
+        self.x_min_spin.setSuffix(" MHz")
+        self.x_min_spin.setValue(x_min_hz / 1e6)
+        x_layout.addWidget(self.x_min_spin, 3, 1)
+
+        x_div_row = QHBoxLayout()
+        x_layout.addWidget(QLabel("# Divisions:"), 4, 0)
+        self.x_div_spin = QSpinBox()
+        self.x_div_spin.setRange(1, 100)
+        self.x_div_spin.setValue(x_divisions)
+        x_div_row.addWidget(self.x_div_spin)
+        self.x_auto_div_cb = QCheckBox("Auto")
+        self.x_auto_div_cb.setChecked(x_auto_div)
+        x_div_row.addWidget(self.x_auto_div_cb)
+        x_layout.addLayout(x_div_row, 4, 1)
+
+        # Wire X auto-div checkbox
+        self.x_auto_div_cb.toggled.connect(
+            lambda checked: self.x_div_spin.setEnabled(not checked)
+        )
+        self.x_div_spin.setEnabled(not x_auto_div)
+
+        # Wire X auto-range checkbox to disable/enable Max/Min spinboxes
+        def _toggle_x_range(checked):
+            self.x_max_spin.setEnabled(not checked)
+            self.x_min_spin.setEnabled(not checked)
+
+        self.x_auto_range_cb.toggled.connect(_toggle_x_range)
+        _toggle_x_range(x_auto_range)
+
+        x_group.setLayout(x_layout)
+
+        # --- Button box (OK / Cancel) ---
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+
+        # --- Top-level layout ---
+        columns = QHBoxLayout()
+        columns.addWidget(y_group)
+        columns.addWidget(x_group)
+
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(columns)
+        main_layout.addWidget(button_box)
+        self.setLayout(main_layout)
+
+    def get_values(self) -> dict:
+        """Return the current dialog values as a dict.
+
+        X-axis values are converted from MHz (display) back to Hz (internal).
+        """
+        return {
+            "y_max": self.y_max_spin.value(),
+            "y_min": self.y_min_spin.value(),
+            "y_divisions": self.y_div_spin.value(),
+            "y_auto_div": self.y_auto_div_cb.isChecked(),
+            "x_max_hz": self.x_max_spin.value() * 1e6,
+            "x_min_hz": self.x_min_spin.value() * 1e6,
+            "x_divisions": self.x_div_spin.value(),
+            "x_auto_div": self.x_auto_div_cb.isChecked(),
+            "x_auto_range": self.x_auto_range_cb.isChecked(),
+        }
 
 
 class VNAMainWindow(QMainWindow, Ui_MainWindow):
@@ -79,7 +351,9 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
 
         The .ui file has a QLabel named 's11TracePlot' inside the 'tracesBox'
         QGroupBox with a verticalLayout_2. We remove it and insert a
-        pyqtgraph PlotWidget in its place.
+        _VNAPlotWidget (custom subclass) in its place.  The subclass replaces
+        pyqtgraph's built-in right-click menu with a single "Axis Setup"
+        action that opens the AxisSetupDialog.
         """
         # Find the parent layout (verticalLayout_2 inside tracesBox)
         placeholder = self.s11TracePlot  # QLabel from compiled UI
@@ -89,18 +363,23 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         parent_layout.removeWidget(placeholder)
         placeholder.deleteLater()
 
-        # Create pyqtgraph PlotWidget
-        self.plot_widget = pg.PlotWidget()
+        # Create custom PlotWidget with right-click "Axis Setup" menu.
+        self.plot_widget = _VNAPlotWidget(
+            axisItems={
+                "bottom": _MHzAxisItem(orientation="bottom"),
+                "left": _dBAxisItem(orientation="left"),
+            }
+        )
         self.plot_widget.setObjectName("s11TracePlot")  # Preserve name
-        self.plot_widget.setLabel("left", "S11 Magnitude", units="dB")
-        self.plot_widget.setLabel("bottom", "Frequency", units="Hz")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        # Enable dynamic Y-axis auto-ranging with 5% padding so traces
-        # don't touch the plot edges.  The X-axis stays manual (set by
-        # the frequency data passed to update_plot).
+
+        # Wire the right-click callback to our dialog opener
+        self.plot_widget._on_axis_setup = self._open_axis_setup_dialog
+
+        # Disable auto-range on Y so _apply_axis_settings() controls it
         view_box = self.plot_widget.getViewBox()
-        view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
-        view_box.setDefaultPadding(0.05)
+        view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
+        view_box.setDefaultPadding(0.0)
 
         # Create plot data item (yellow pen for S11 trace)
         self.plot_data_item = self.plot_widget.plot(
@@ -109,6 +388,20 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
 
         # Add to layout
         parent_layout.addWidget(self.plot_widget)
+
+        # Initialise default axis state and apply to the plot
+        self._axis_state = {
+            "y_max": 20.0,
+            "y_min": -50.0,
+            "y_divisions": 7,
+            "y_auto_div": True,
+            "x_max_hz": 250_000_000.0,
+            "x_min_hz": 200_000_000.0,
+            "x_divisions": 10,
+            "x_auto_div": True,
+            "x_auto_range": True,
+        }
+        self._apply_axis_settings()
 
     def _connect_widget_signals(self):
         """
@@ -257,11 +550,14 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         """
         Update plot with new sweep data (overwrites previous trace).
 
-        After setting the new data, re-enables Y-axis auto-range so the
-        view always fits the current trace.  This also recovers auto-range
-        if the user previously zoomed/panned (which disables it in
-        pyqtgraph).  The 5% default padding set in _setup_plot_widget()
-        is preserved.
+        If the X-axis is in auto-range mode (the default), re-enables
+        auto-range so the view stretches horizontally to the current
+        frequency span.  When the user has set a manual X range via the
+        Axis Setup dialog, auto-range is left disabled and the fixed
+        range is preserved.
+
+        The Y-axis range is always controlled by ``_axis_state`` and is
+        not auto-ranged.
 
         Args:
             freq_hz: Frequency array in Hz
@@ -269,11 +565,96 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         """
         self.plot_data_item.setData(freq_hz, s11_db)
 
-        # Re-enable Y auto-range so the axis rescales to the new data.
-        # Without this, a previous manual zoom would freeze the Y range.
-        self.plot_widget.getViewBox().enableAutoRange(
-            axis=pg.ViewBox.YAxis, enable=True
+        # Only re-enable X auto-range when the user has not set a manual range
+        if self._axis_state.get("x_auto_range", True):
+            self.plot_widget.getViewBox().enableAutoRange(
+                axis=pg.ViewBox.XAxis, enable=True
+            )
+
+    # -----------------------------------------------------------------------
+    # Axis Setup dialog and helpers
+    # -----------------------------------------------------------------------
+
+    def _open_axis_setup_dialog(self):
+        """Open the Axis Setup dialog pre-populated with current state.
+
+        Called by the right-click context menu on the plot widget.  If the
+        user accepts (OK), the new values are stored in ``_axis_state`` and
+        immediately applied to the live plot.
+        """
+        s = self._axis_state
+        dlg = AxisSetupDialog(
+            y_max=s["y_max"],
+            y_min=s["y_min"],
+            y_divisions=s["y_divisions"],
+            y_auto_div=s["y_auto_div"],
+            x_max_hz=s["x_max_hz"],
+            x_min_hz=s["x_min_hz"],
+            x_divisions=s["x_divisions"],
+            x_auto_div=s["x_auto_div"],
+            x_auto_range=s["x_auto_range"],
+            parent=self,
         )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            vals = dlg.get_values()
+            self._axis_state.update(vals)
+            self._apply_axis_settings()
+
+    def _apply_axis_settings(self):
+        """Apply the current ``_axis_state`` to the live plot.
+
+        Configures Y-axis range and tick labels, X-axis range (fixed or
+        auto), and tick divisions for both axes.
+        """
+        s = self._axis_state
+
+        # --- Y axis ---
+        self.plot_widget.setYRange(s["y_min"], s["y_max"], padding=0)
+
+        y_axis = self.plot_widget.getAxis("left")
+        if s["y_auto_div"]:
+            step = _nice_step(s["y_max"], s["y_min"])
+            ticks = [
+                (v, f"{v:.0f}dB")
+                for v in _frange(s["y_max"], s["y_min"], -step)
+            ]
+        else:
+            n = s["y_divisions"]
+            span = s["y_max"] - s["y_min"]
+            step = span / n if n else span
+            ticks = [
+                (s["y_max"] - i * step, f"{s['y_max'] - i * step:.0f}dB")
+                for i in range(n + 1)
+            ]
+        y_axis.setTicks([ticks, []])
+
+        # --- X axis ---
+        if not s["x_auto_range"]:
+            self.plot_widget.setXRange(
+                s["x_min_hz"], s["x_max_hz"], padding=0
+            )
+            self.plot_widget.getViewBox().enableAutoRange(
+                axis=pg.ViewBox.XAxis, enable=False
+            )
+        else:
+            self.plot_widget.getViewBox().enableAutoRange(
+                axis=pg.ViewBox.XAxis, enable=True
+            )
+
+        x_axis = self.plot_widget.getAxis("bottom")
+        if not s["x_auto_div"]:
+            x_min = s["x_min_hz"]
+            x_max = s["x_max_hz"]
+            n = s["x_divisions"]
+            span = x_max - x_min
+            step = span / n if n else span
+            x_ticks = [
+                (x_min + i * step, f"{(x_min + i * step) / 1e6:.0f}MHz")
+                for i in range(n + 1)
+            ]
+            x_axis.setTicks([x_ticks, []])
+        else:
+            x_axis.setTicks(None)  # Let pyqtgraph auto-generate ticks
 
     def clear_plot(self):
         """Clear plot data (empty trace)."""
