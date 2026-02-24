@@ -46,3 +46,16 @@ Despite the agent name, this project uses PySide6. Import `Signal`, `Slot` from 
 ## Key Constants (vna_backend.py)
 - SCPI_HOST="localhost", SCPI_PORT=19542, STREAMING_PORT=19001
 - GUI_START_TIMEOUT_S=30.0, CONTINUOUS_TIMEOUT_S=300
+
+## Axis Setup Dialog Feature (2026-02-24)
+- `_VNAPlotWidget(pg.PlotWidget)` subclass replaces pyqtgraph built-in context menu
+- Disable pyqtgraph menu: `self.getViewBox().setMenuEnabled(False)` in `__init__`
+- Monkey-patch callback: `self.plot_widget._on_axis_setup = self._open_axis_setup_dialog`
+- `AxisSetupDialog(QDialog)`: two QGroupBox columns (Y axis, X axis), OK/Cancel
+- X values: displayed in MHz, stored internally in Hz (multiply/divide by 1e6)
+- Auto checkboxes disable spinboxes via `toggled` signal
+- `_axis_state` dict on VNAMainWindow stores current axis config
+- `_apply_axis_settings()` sets Y range, Y ticks, X range/auto, X ticks
+- `_nice_step()` picks "nice" round tick spacing (1/2/5/10 multipliers)
+- `_frange()` generates inclusive float ranges for tick positions
+- `update_plot()` respects `x_auto_range` setting (does not force auto-range when manual)
