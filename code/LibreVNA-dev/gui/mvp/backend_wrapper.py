@@ -45,6 +45,180 @@ from .vna_backend import (
 from .libreVNA import libreVNA
 
 
+# ---------------------------------------------------------------------------
+# Port cleanup utilities (adapted from scripts/0_librevna_cleanup.py)
+# ---------------------------------------------------------------------------
+
+# Ports used by LibreVNA-GUI
+LIBREVNA_PORTS = {
+    1234:  "SCPI server",
+    19000: "VNA Raw streaming",
+    19001: "VNA Calibrated streaming",
+    19002: "VNA De-embedded streaming",
+    19542: "Internal LibreVNA TCP",
+}
+
+# Process names to exclude from port cleanup (remote/tunneling services)
+SAFE_PROCESS_NAMES = {
+    "sshd",          # SSH daemon
+    "ssh",           # SSH client
+    "code-server",   # VS Code remote
+    "devtunnel",     # Visual Studio devtunnel
+    "openvpn",       # OpenVPN
+    "wsl",           # Windows Subsystem for Linux
+    "docker",        # Docker Desktop
+    "putty",         # PuTTY SSH client
+    "remote",        # Generic remote service
+}
+
+
+def _run_powershell(command: str, timeout: float = 15.0) -> str:
+    """Run a PowerShell command and return its stdout.
+
+    Args:
+        command: PowerShell command string
+        timeout: Maximum execution time in seconds
+
+    Returns:
+        Stripped stdout output, or empty string on failure
+    """
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        logger.warning("PowerShell command failed: %s", exc)
+        return ""
+
+
+def find_port_owners() -> Dict[int, dict]:
+    """Find processes currently using LibreVNA ports.
+
+    Uses ``netstat -ano`` via PowerShell to scan for TCP/UDP listeners on
+    the ports defined in LIBREVNA_PORTS.
+
+    Returns:
+        Dictionary mapping port number to {'pid': int, 'state': str,
+        'protocol': str} for each occupied LibreVNA port.  Empty dict
+        if no ports are in use or on non-Windows platforms.
+    """
+    if platform.system() != "Windows":
+        logger.debug("Port cleanup is Windows-only; skipping find_port_owners()")
+        return {}
+
+    raw = _run_powershell("netstat -ano")
+    if not raw:
+        return {}
+
+    results = {}
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+
+        # Skip header lines
+        if parts[0] not in ("TCP", "UDP"):
+            continue
+
+        proto = parts[0]        # TCP or UDP
+        local = parts[1]        # e.g. 0.0.0.0:19001
+        state = parts[3] if proto == "TCP" else "N/A"
+
+        try:
+            pid = int(parts[-1])
+        except ValueError:
+            continue
+
+        # Extract port number from local address
+        try:
+            port = int(local.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            continue
+
+        # Only include ports we care about, first match wins
+        if port in LIBREVNA_PORTS and port not in results:
+            results[port] = {"pid": pid, "state": state, "protocol": proto}
+
+    return results
+
+
+def _get_process_name(pid: int) -> str:
+    """Get the process name for a given PID via PowerShell.
+
+    Args:
+        pid: Process ID to look up
+
+    Returns:
+        Process name string, or "unknown" on failure
+    """
+    try:
+        ps_script = f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue).ProcessName"
+        result = _run_powershell(ps_script)
+        return result if result else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def kill_port_users(port_owners: Dict[int, dict]) -> int:
+    """Terminate processes using LibreVNA ports.
+
+    Skips processes in SAFE_PROCESS_NAMES (SSH, remote development, VPN,
+    etc.) to prevent breaking remote sessions.
+
+    Args:
+        port_owners: Dictionary from find_port_owners() mapping port to
+            {'pid': int, 'state': str, 'protocol': str}
+
+    Returns:
+        Number of processes successfully terminated
+    """
+    if not port_owners:
+        return 0
+
+    if platform.system() != "Windows":
+        logger.debug("Port cleanup is Windows-only; skipping kill_port_users()")
+        return 0
+
+    # Collect unique PIDs
+    pids_to_kill = set(info["pid"] for info in port_owners.values())
+    killed = 0
+
+    for pid in pids_to_kill:
+        # Find which ports this PID is using
+        ports_used = [port for port, info in port_owners.items() if info["pid"] == pid]
+        port_list = ", ".join(f":{p}" for p in sorted(ports_used))
+
+        proc_name = _get_process_name(pid)
+
+        # Skip critical remote/tunneling processes
+        if proc_name.lower() in SAFE_PROCESS_NAMES:
+            logger.info(
+                "Port cleanup: SKIP PID %d (%s) using ports %s -- critical process",
+                pid, proc_name, port_list,
+            )
+            continue
+
+        logger.info(
+            "Port cleanup: Terminating PID %d (%s) using ports %s",
+            pid, proc_name, port_list,
+        )
+        try:
+            _run_powershell(f"Stop-Process -Id {pid} -Force")
+            killed += 1
+        except Exception as exc:
+            logger.warning("Port cleanup: Failed to kill PID %d: %s", pid, exc)
+
+    # Brief pause to let the OS release port resources
+    if killed > 0:
+        time.sleep(1.0)
+
+    return killed
+
+
 def _is_scpi_server_running(host: str = SCPI_HOST, port: int = SCPI_PORT,
                             timeout: float = 1.0) -> bool:
     """
