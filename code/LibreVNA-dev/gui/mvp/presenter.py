@@ -675,7 +675,7 @@ class VNAMonitorWorker(QThread):
             if self.base_output_dir is not None:
                 today = __import__('datetime').datetime.now().strftime("%Y%m%d")
                 monitor_out_dir = __import__('os').path.join(
-                    self.base_output_dir, today
+                    self.base_output_dir, "data", today
                 )
             csv_path = self.adapter.stop_recording(output_dir=monitor_out_dir)
             if csv_path:
