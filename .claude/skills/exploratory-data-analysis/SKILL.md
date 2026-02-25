@@ -4,6 +4,8 @@ description: Perform comprehensive exploratory data analysis on scientific data 
 license: MIT license
 metadata:
     skill-author: K-Dense Inc.
+context: fork
+agent: vna-data-analyst, rf-data-analyst
 ---
 
 # Exploratory Data Analysis
