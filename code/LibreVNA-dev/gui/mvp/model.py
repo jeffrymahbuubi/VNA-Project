@@ -6,6 +6,7 @@ data structures, and validation rules. It is unit-testable without GUI.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import List, Optional, Tuple
 import numpy as np
 
@@ -89,12 +90,20 @@ class SweepConfig:
         has been applied, enforcing the architectural invariant that the
         calibration file is the single source of truth for sweep range
         and point count.
+
+        Supports both restructured YAML (target.default.ifbw_values)
+        and legacy flat (target.ifbw_values).
         """
         config = data.get("configurations", {})
         target = data.get("target", {})
 
-        # Handle both single IFBW value and list
-        ifbw_values = target.get("ifbw_values", [50000])
+        # Handle restructured YAML: target.default.ifbw_values
+        # Fall back to legacy: target.ifbw_values
+        if "default" in target:
+            ifbw_values = target["default"].get("ifbw_values", [50000])
+        else:
+            ifbw_values = target.get("ifbw_values", [50000])
+
         if isinstance(ifbw_values, int):
             ifbw_values = [ifbw_values]
 
@@ -137,6 +146,46 @@ class SweepConfig:
 
 
 @dataclass
+class MonitorConfig:
+    """Monitor mode configuration parameters."""
+
+    ifbw_hz: int = 50000            # Single IFBW for monitor mode (Hz)
+    log_interval_ms: str = "auto"   # "auto" or int ms
+    duration_s: float = 0           # 0 = indefinite; >0 = stop after N seconds
+    warmup_sweeps: int = 5          # Sweeps used to estimate sweep time
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MonitorConfig":
+        """Create from YAML target.monitor section."""
+        mon = data.get("target", {}).get("monitor", {})
+        return cls(
+            ifbw_hz=int(mon.get("ifbw_hz", 50000)),
+            log_interval_ms=mon.get("log_interval_ms", "auto"),
+            duration_s=float(mon.get("duration_s", 0)),
+            warmup_sweeps=int(mon.get("warmup_sweeps", 5)),
+        )
+
+    def to_backend_dict(self, stim_lvl_dbm: int = -10, avg_count: int = 1) -> dict:
+        """Convert to dictionary for GUIVNAMonitorAdapter."""
+        return {
+            "ifbw_hz": self.ifbw_hz,
+            "warmup_sweeps": self.warmup_sweeps,
+            "stim_lvl_dbm": stim_lvl_dbm,
+            "avg_count": avg_count,
+            "num_sweeps": self.warmup_sweeps,  # Backend uses this for warmup
+        }
+
+
+@dataclass
+class MonitorRecord:
+    """One logged data point captured during monitor mode."""
+
+    timestamp: datetime
+    freq_hz: float        # Frequency where S11 is minimum (Hz)
+    s11_db: float         # S11 magnitude at that frequency (dB)
+
+
+@dataclass
 class SweepData:
     """Single sweep measurement data."""
 
@@ -159,6 +208,7 @@ class VNADataModel:
         self.device = DeviceInfo()
         self.calibration = CalibrationState()
         self.config = SweepConfig()
+        self.monitor_config = MonitorConfig()
 
         # Storage for sweep measurements
         self.sweep_data: List[SweepData] = []
@@ -168,6 +218,11 @@ class VNADataModel:
         self._current_ifbw: Optional[int] = None
         self._latest_freq: Optional[np.ndarray] = None
         self._latest_s11: Optional[np.ndarray] = None
+
+        # Monitor mode state
+        self.monitor_records: List[MonitorRecord] = []
+        self.is_monitoring: bool = False
+        self.monitor_effective_log_interval_ms: float = 0.0
 
     def is_ready_to_collect(self) -> bool:
         """
@@ -290,6 +345,16 @@ class VNADataModel:
         """
         return [sweep for sweep in self.sweep_data if sweep.ifbw_hz == ifbw_hz]
 
+    def add_monitor_record(self, record: MonitorRecord) -> None:
+        """Add a logged monitor data point."""
+        self.monitor_records.append(record)
+
+    def clear_monitor_data(self) -> None:
+        """Clear all accumulated monitor records."""
+        self.monitor_records.clear()
+        self.is_monitoring = False
+        self.monitor_effective_log_interval_ms = 0.0
+
     def __repr__(self) -> str:
         """String representation for debugging."""
         return (
@@ -298,6 +363,7 @@ class VNADataModel:
             f"  cal_loaded={self.calibration.loaded},\n"
             f"  config_valid={self.config.is_valid()},\n"
             f"  total_sweeps={len(self.sweep_data)},\n"
+            f"  monitor_records={len(self.monitor_records)},\n"
             f"  ready={self.is_ready_to_collect()}\n"
             f")"
         )
