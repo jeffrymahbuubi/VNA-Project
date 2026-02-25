@@ -37,9 +37,10 @@ logger = logging.getLogger(__name__)
 
 # Import from local backend module (standalone)
 from .vna_backend import (
-    ContinuousModeSweep, SweepResult,
+    ContinuousModeSweep, SweepResult, MonitorRecord,
+    export_dataflux_csv,
     SCPI_HOST, SCPI_PORT, GUI_START_TIMEOUT_S,
-    GUI_BINARY, _MODULE_DIR,
+    GUI_BINARY, STREAMING_PORT, _MODULE_DIR,
 )
 from .libreVNA import libreVNA
 
@@ -573,3 +574,379 @@ class GUIVNASweepAdapter:
             return serial.strip()
         except Exception:
             return "Query failed"
+
+
+# ===========================================================================
+# GUIVNAMonitorAdapter  --  monitor mode backend for GUI
+# ===========================================================================
+
+
+class GUIVNAMonitorAdapter:
+    """
+    Adapter for monitor mode that captures per-sweep scalar data points
+    (min-frequency S11) using the streaming infrastructure from ContinuousModeSweep.
+
+    Lifecycle:
+        adapter = GUIVNAMonitorAdapter(config_dict, cal_file_path)
+        device_info = adapter.start_lifecycle()
+        mean_ms = adapter.run_warmup()
+        adapter.start_recording(point_callback, effective_log_interval_ms)
+        # ... runs until stop or duration ...
+        csv_path = adapter.stop_recording()
+        adapter.stop_lifecycle()
+    """
+
+    def __init__(self, config_dict: dict, calibration_file_path: str):
+        """
+        Parameters
+        ----------
+        config_dict : dict
+            Must contain:
+                'stim_lvl_dbm': int
+                'avg_count': int
+                'ifbw_hz': int          -- single IFBW for monitor mode
+                'warmup_sweeps': int    -- sweeps used to estimate sweep time
+                'num_sweeps': int       -- used for warmup only
+        calibration_file_path : str
+            Absolute path to .cal file.
+        """
+        self.config = config_dict
+        self.cal_file_path = calibration_file_path
+
+        # Create temporary YAML config for ContinuousModeSweep
+        self.temp_config_path = self._create_temp_config()
+
+        # ContinuousModeSweep instance for SCPI lifecycle and streaming
+        self.sweep = ContinuousModeSweep(
+            config_path=self.temp_config_path,
+            cal_file_path=self.cal_file_path,
+            mode="continuous",
+            summary=False,
+            save_data=False,
+        )
+
+        # Lifecycle state
+        self.gui_process = None
+        self.vna = None
+        self._vna_serial = "unknown"
+
+        # Monitor recording state
+        self._monitor_callback = None
+        self._monitor_records: List[MonitorRecord] = []
+        self._stop_event = None
+        self._effective_log_interval_ms = 0.0
+
+    def _create_temp_config(self) -> str:
+        """Create a temporary sweep_config.yaml for ContinuousModeSweep."""
+        import tempfile
+        import yaml
+
+        ifbw_hz = self.config.get('ifbw_hz', 50000)
+        yaml_config = {
+            'configurations': {
+                'stim_lvl_dbm': self.config.get('stim_lvl_dbm', -10),
+                'avg_count': self.config.get('avg_count', 1),
+                'num_sweeps': self.config.get('warmup_sweeps', 5),
+            },
+            'target': {
+                'ifbw_values': [ifbw_hz],
+            }
+        }
+
+        fd, path = tempfile.mkstemp(suffix='.yaml', prefix='gui_monitor_')
+        with os.fdopen(fd, 'w') as f:
+            yaml.dump(yaml_config, f)
+
+        return path
+
+    def start_lifecycle(self) -> Dict[str, str]:
+        """
+        Start GUI subprocess, connect, load calibration, enable streaming.
+
+        Returns
+        -------
+        dict
+            Keys: 'serial', 'idn'.
+        """
+        # Start GUI
+        self.gui_process = self.sweep.start_gui()
+
+        # Connect and verify
+        self.vna = self.sweep.connect_and_verify()
+
+        # Capture serial
+        try:
+            idn_raw = self.vna.query("*IDN?")
+            parts = [p.strip() for p in idn_raw.split(",")]
+            self._vna_serial = parts[2] if len(parts) > 2 else "unknown"
+        except Exception:
+            idn_raw = "unknown"
+            self._vna_serial = "unknown"
+
+        # Enable streaming server (may restart GUI)
+        needs_restart = self.sweep.enable_streaming_server(self.vna)
+        if needs_restart:
+            self.sweep.stop_gui(self.gui_process)
+            self.gui_process = self.sweep.start_gui()
+            self.vna = self.sweep.connect_and_verify()
+            try:
+                idn_raw = self.vna.query("*IDN?")
+                parts = [p.strip() for p in idn_raw.split(",")]
+                self._vna_serial = parts[2] if len(parts) > 2 else "unknown"
+            except Exception:
+                pass
+
+        # Load calibration
+        self.sweep.load_calibration(self.vna, self.cal_file_path)
+
+        # Configure sweep with the single IFBW
+        ifbw_hz = self.config.get('ifbw_hz', 50000)
+        self.sweep.configure_sweep(self.vna, ifbw_hz)
+
+        # Register streaming callback once
+        self.sweep.pre_loop_reset(self.vna)
+
+        return {
+            'serial': self._vna_serial,
+            'idn': idn_raw,
+        }
+
+    def run_warmup(self, warmup_sweeps: int = 5) -> float:
+        """
+        Run warmup sweeps and return mean sweep time in milliseconds.
+
+        Uses ContinuousModeSweep's streaming loop with a temporary num_sweeps.
+
+        Parameters
+        ----------
+        warmup_sweeps : int
+            Number of warmup sweeps.
+
+        Returns
+        -------
+        float
+            Mean sweep duration in milliseconds.
+        """
+        ifbw_hz = self.config.get('ifbw_hz', 50000)
+
+        # Temporarily override num_sweeps for warmup
+        original_num_sweeps = self.sweep.num_sweeps
+        self.sweep.num_sweeps = warmup_sweeps
+
+        try:
+            result = self.sweep._continuous_sweep_loop(self.vna, ifbw_hz)
+        finally:
+            self.sweep.num_sweeps = original_num_sweeps
+
+        if not result.sweep_times:
+            raise RuntimeError("Warmup produced no completed sweeps.")
+
+        mean_ms = float(np.mean(result.sweep_times)) * 1000.0
+        logger.info("Warmup: %d sweeps, mean=%.1f ms", len(result.sweep_times), mean_ms)
+        return mean_ms
+
+    def start_recording(
+        self,
+        point_callback: Optional[Callable] = None,
+        effective_log_interval_ms: float = 0.0,
+    ):
+        """
+        Start the monitor recording loop.
+
+        Registers a streaming callback that extracts per-sweep scalar data
+        (min S11 dB + corresponding frequency) and applies log interval gating.
+
+        Parameters
+        ----------
+        point_callback : callable or None
+            Called with (MonitorRecord) for each logged point.
+            Should emit Qt signal for thread-safe GUI update.
+        effective_log_interval_ms : float
+            Minimum interval between logged points.  0 = log every sweep.
+        """
+        import threading as _threading
+        import math as _math
+        from datetime import datetime as _dt
+
+        self._effective_log_interval_ms = effective_log_interval_ms
+        self._monitor_records = []
+        self._stop_event = _threading.Event()
+
+        freq_hz_axis = np.linspace(
+            float(self.sweep.start_freq_hz),
+            float(self.sweep.stop_freq_hz),
+            self.sweep.num_points,
+        )
+
+        # Shared mutable state for the callback
+        mon_state = {
+            "current_s11": [],
+            "last_log_time_ms": None,
+            "record_count": 0,
+        }
+        num_points = self.sweep.num_points
+        stop_event = self._stop_event
+        records = self._monitor_records
+
+        def _monitor_cb(data):
+            if stop_event.is_set():
+                return
+            if "Z0" not in data:
+                return
+
+            point_num = data["pointNum"]
+            s11_complex = data["measurements"].get("S11", complex(0, 0))
+            point_time = time.time()
+
+            if point_num == 0:
+                mon_state["current_s11"] = []
+
+            mon_state["current_s11"].append(s11_complex)
+
+            if point_num == num_points - 1:
+                collected = list(mon_state["current_s11"])
+                if len(collected) != num_points:
+                    return  # partial sweep
+
+                sweep_ts = _dt.now()
+
+                # Convert to dB
+                s11_db = np.array([
+                    20.0 * _math.log10(max(abs(g), 1e-12))
+                    for g in collected
+                ])
+
+                # Find minimum
+                min_idx = int(np.argmin(s11_db))
+                min_freq = float(freq_hz_axis[min_idx])
+                min_s11_db = float(s11_db[min_idx])
+
+                # Log-interval gating
+                last_ms = mon_state["last_log_time_ms"]
+                now_ms = point_time * 1000.0
+                if (
+                    last_ms is None
+                    or (now_ms - last_ms) >= effective_log_interval_ms
+                ):
+                    record = MonitorRecord(
+                        timestamp=sweep_ts,
+                        freq_hz=min_freq,
+                        s11_db=min_s11_db,
+                    )
+                    records.append(record)
+                    mon_state["last_log_time_ms"] = now_ms
+                    mon_state["record_count"] += 1
+
+                    if point_callback is not None:
+                        try:
+                            point_callback(record)
+                        except Exception as exc:
+                            logger.warning("Monitor callback error: %s", exc)
+
+        self._monitor_callback = _monitor_cb
+
+        # Register monitor callback on the streaming port
+        self.vna.add_live_callback(STREAMING_PORT, _monitor_cb)
+        logger.info("Monitor callback registered on port %d", STREAMING_PORT)
+
+        # Start continuous acquisition
+        self.vna.cmd(":VNA:ACQ:STOP")
+        time.sleep(0.1)  # drain stale data
+        self.vna.cmd(":VNA:ACQ:SINGLE FALSE")
+        self.vna.cmd(":VNA:ACQ:RUN")
+        logger.info("Monitor acquisition started")
+
+    def stop_recording(self) -> Optional[str]:
+        """
+        Stop the monitor recording and export Dataflux CSV.
+
+        Returns
+        -------
+        str or None
+            Path to the exported CSV, or None if no records.
+        """
+        # Signal callback to stop
+        if self._stop_event:
+            self._stop_event.set()
+
+        # Stop acquisition
+        if self.vna:
+            try:
+                self.vna.cmd(":VNA:ACQ:STOP")
+            except Exception:
+                pass
+            try:
+                self.vna.cmd(":VNA:ACQ:SINGLE TRUE")
+            except Exception:
+                pass
+
+        # Remove monitor callback
+        if self._monitor_callback and self.vna:
+            try:
+                self.vna.remove_live_callback(STREAMING_PORT, self._monitor_callback)
+            except Exception:
+                pass
+            self._monitor_callback = None
+
+        # Export Dataflux CSV
+        if not self._monitor_records:
+            logger.info("No monitor records to export")
+            return None
+
+        ifbw_hz = self.config.get('ifbw_hz', 50000)
+        csv_path = export_dataflux_csv(
+            records=self._monitor_records,
+            vna_serial=self._vna_serial,
+            ifbw_hz=ifbw_hz,
+            effective_log_interval_ms=self._effective_log_interval_ms,
+            start_freq_hz=self.sweep.start_freq_hz,
+            stop_freq_hz=self.sweep.stop_freq_hz,
+            num_points=self.sweep.num_points,
+        )
+        logger.info("Monitor CSV exported: %s (records=%d)",
+                     csv_path, len(self._monitor_records))
+        return csv_path
+
+    def stop_lifecycle(self):
+        """
+        Teardown streaming, terminate GUI subprocess, cleanup.
+
+        Safe to call multiple times (idempotent).
+        """
+        # Stop recording if still active
+        if self._stop_event and not self._stop_event.is_set():
+            self.stop_recording()
+
+        # Teardown streaming callback from ContinuousModeSweep
+        if self.vna:
+            try:
+                self.sweep.post_loop_teardown(self.vna)
+            except Exception as exc:
+                logger.warning("post_loop_teardown error: %s", exc)
+
+        # Close SCPI connection
+        if self.vna:
+            try:
+                self.vna.close()
+            except Exception:
+                pass
+            self.vna = None
+
+        # Terminate GUI subprocess
+        if self.gui_process:
+            try:
+                self.sweep.stop_gui(self.gui_process)
+            except Exception:
+                try:
+                    self.gui_process.kill()
+                    self.gui_process.wait(timeout=5)
+                except Exception:
+                    pass
+            self.gui_process = None
+
+        # Cleanup temp config
+        if hasattr(self, 'temp_config_path') and os.path.exists(self.temp_config_path):
+            try:
+                os.unlink(self.temp_config_path)
+            except Exception:
+                pass
