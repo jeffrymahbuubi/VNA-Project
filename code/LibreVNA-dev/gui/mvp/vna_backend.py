@@ -144,7 +144,7 @@ def export_dataflux_csv(
 
     if output_dir is None:
         today = datetime.now().strftime("%Y%m%d")
-        output_dir = os.path.join(_MODULE_DIR, "..", "..", "data", today)
+        output_dir = os.path.join(_MODULE_DIR, "..", "data", today)
     os.makedirs(output_dir, exist_ok=True)
 
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -732,7 +732,7 @@ class BaseVNASweep(ABC):
         # -- Output directory: output_dir/{mode}_sweep_test_{timestamp}/ ------
         if output_dir is None:
             today = datetime.now().strftime("%Y%m%d")
-            output_dir = os.path.join(_MODULE_DIR, "..", "..", "data", today)
+            output_dir = os.path.join(_MODULE_DIR, "..", "data", today)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_name = "{}_sweep_test_{}".format(self.mode, timestamp)
