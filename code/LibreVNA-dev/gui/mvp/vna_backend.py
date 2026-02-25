@@ -90,6 +90,108 @@ class SweepResult:
     trace_jitter: float = 0.0  # filled by compute_metrics
 
 
+# ---------------------------------------------------------------------------
+# MonitorRecord dataclass
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class MonitorRecord:
+    """One logged data point captured during Monitor Mode."""
+
+    timestamp: datetime   # wall-clock time of the completed sweep
+    freq_hz: float        # frequency (Hz) where S11 is minimum
+    s11_db: float         # S11 magnitude (dB) at that frequency
+
+
+# ---------------------------------------------------------------------------
+# Dataflux CSV export (used by monitor mode)
+# ---------------------------------------------------------------------------
+
+
+def export_dataflux_csv(
+    records,
+    vna_serial,
+    ifbw_hz,
+    effective_log_interval_ms,
+    start_freq_hz,
+    stop_freq_hz,
+    num_points,
+    output_dir=None,
+):
+    """
+    Write a Dataflux-compatible CSV file from monitor records.
+
+    Parameters
+    ----------
+    records                   : list[MonitorRecord]
+    vna_serial                : str
+    ifbw_hz                   : int
+    effective_log_interval_ms : float
+    start_freq_hz             : int
+    stop_freq_hz              : int
+    num_points                : int
+    output_dir                : str or None
+        Base output directory.  If None, uses ../../data/YYYYMMDD/.
+
+    Returns
+    -------
+    str or None
+        Absolute path to the written CSV file, or None if no records.
+    """
+    if not records:
+        return None
+
+    if output_dir is None:
+        today = datetime.now().strftime("%Y%m%d")
+        output_dir = os.path.join(_MODULE_DIR, "..", "..", "data", today)
+    os.makedirs(output_dir, exist_ok=True)
+
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = "vna_monitor_{}.csv".format(timestamp_str)
+    csv_path = os.path.join(output_dir, filename)
+
+    start_dt = records[0].timestamp
+    num_data = len(records)
+    freq_start_mhz = start_freq_hz / 1e6
+    freq_stop_mhz = stop_freq_hz / 1e6
+    freq_span_mhz = freq_stop_mhz - freq_start_mhz
+    ifbw_khz = ifbw_hz / 1000.0
+
+    with open(csv_path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+
+        # Metadata header block (12 lines)
+        writer.writerow(["Application", "VNA-DATAFLUX"])
+        writer.writerow(["VNA Model", "LibreVNA"])
+        writer.writerow(["VNA Serial", vna_serial])
+        writer.writerow(["File Name", filename])
+        writer.writerow(["Start DateTime", start_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")])
+        writer.writerow(["Number of Data", num_data])
+        writer.writerow(["Log Interval(ms)", "{:.1f}".format(effective_log_interval_ms)])
+        writer.writerow(["Freq Start(MHz)", "{:.6f}".format(freq_start_mhz)])
+        writer.writerow(["Freq Stop(MHz)", "{:.6f}".format(freq_stop_mhz)])
+        writer.writerow(["Freq Span(MHz)", "{:.6f}".format(freq_span_mhz)])
+        writer.writerow(["IF Bandwidth(KHz)", "{:.3f}".format(ifbw_khz)])
+        writer.writerow(["Points", num_points])
+
+        # Two blank lines
+        writer.writerow([])
+        writer.writerow([])
+
+        # Column header
+        writer.writerow(["Time", "Marker Stimulus (Hz)", "Marker Y Real Value (dB)"])
+
+        # Data rows
+        for rec in records:
+            time_str = rec.timestamp.strftime("%H:%M:%S.%f")
+            freq_str = "{:+.9E}".format(rec.freq_hz)
+            s11_str = "{:+.9E}".format(rec.s11_db)
+            writer.writerow([time_str, freq_str, s11_str])
+
+    return csv_path
+
+
 # ===========================================================================
 # BaseVNASweep  --  abstract base class
 # ===========================================================================
