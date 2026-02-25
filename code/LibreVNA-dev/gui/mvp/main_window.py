@@ -38,6 +38,8 @@ class Ui_MainWindow(object):
         self.actionLoad.setObjectName(u"actionLoad")
         self.actionLoad_yaml_config = QAction(MainWindow)
         self.actionLoad_yaml_config.setObjectName(u"actionLoad_yaml_config")
+        self.actionSave_data_folder = QAction(MainWindow)
+        self.actionSave_data_folder.setObjectName(u"actionSave_data_folder")
         self.actionSerial_LibreVNA_USB = QAction(MainWindow)
         self.actionSerial_LibreVNA_USB.setObjectName(u"actionSerial_LibreVNA_USB")
         font1 = QFont()
@@ -373,6 +375,7 @@ class Ui_MainWindow(object):
         self.menuConnect_to.addAction(self.actionSerial_LibreVNA_USB)
         self.menuCalibration.addAction(self.actionLoad)
         self.menuConfiguration.addAction(self.actionLoad_yaml_config)
+        self.menuConfiguration.addAction(self.actionSave_data_folder)
 
         self.retranslateUi(MainWindow)
 
@@ -383,6 +386,7 @@ class Ui_MainWindow(object):
         MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", u"MainWindow", None))
         self.actionLoad.setText(QCoreApplication.translate("MainWindow", u"Load .cal file", None))
         self.actionLoad_yaml_config.setText(QCoreApplication.translate("MainWindow", u"Load .yaml config", None))
+        self.actionSave_data_folder.setText(QCoreApplication.translate("MainWindow", u"Save Data Folder\u2026", None))
         self.actionSerial_LibreVNA_USB.setText(QCoreApplication.translate("MainWindow", u"Serial (LibreVNA/USB)", None))
         self.logoWTMH.setText("")
         self.sweepBox.setTitle(QCoreApplication.translate("MainWindow", u"Sweep Configuration", None))
