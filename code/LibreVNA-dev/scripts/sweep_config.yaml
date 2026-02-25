@@ -7,9 +7,15 @@
 configurations:
   stim_lvl_dbm: -10
   avg_count: 1
-  num_sweeps: 10                   # sweeps per IFBW value
+  num_sweeps: 10                   # sweeps per IFBW value (default/single/continuous modes)
 
 target:
-  ifbw_values:                     # single int OR list of ints in Hz
-    - 75000
+  default:
+    ifbw_values:                   # list of IFBW values (Hz) for device sanity benchmark
+      - 75000
 
+  monitor:
+    ifbw_hz: 75000                 # single IFBW (Hz) for monitor mode (must be one value)
+    log_interval_ms: auto          # "auto" or integer ms; "auto" = log every completed sweep
+    duration_s: 0                  # 0 = continuous until Ctrl-C; >0 = stop after N seconds
+    warmup_sweeps: 5               # number of sweeps used to estimate actual sweep time
