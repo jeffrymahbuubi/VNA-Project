@@ -1,5 +1,5 @@
-skill_generation_model: sonnet   # Default skill generation model
-eval_model: haiku               # Default evaluation model (optional)
+skill_generation_model: claude-sonnet-4-6        # Default skill generation model
+eval_model: claude-haiku-4-5-20251001           # Default evaluation model (optional)
 test_gen_model: null            # Optional test generation model
 skills_dir: .claude/skills
 runs_dir: .claude/upskill-runs  # Where to save run logs
