@@ -923,6 +923,7 @@ class GUIVNAMonitorAdapter:
         self,
         point_callback: Optional[Callable] = None,
         effective_log_interval_ms: float = 0.0,
+        preview_callback: Optional[Callable] = None,
     ):
         """
         Start the monitor recording loop.
@@ -937,6 +938,10 @@ class GUIVNAMonitorAdapter:
             Should emit Qt signal for thread-safe GUI update.
         effective_log_interval_ms : float
             Minimum interval between logged points.  0 = log every sweep.
+        preview_callback : callable or None
+            Called with (freqs_hz: list, s11_db: list) after each complete
+            sweep for live plot updates.  The frequency list is in Hz and
+            s11_db is magnitude in dB.
         """
         import threading as _threading
         import math as _math
@@ -989,6 +994,15 @@ class GUIVNAMonitorAdapter:
                     20.0 * _math.log10(max(abs(g), 1e-12))
                     for g in collected
                 ])
+
+                # Emit full sweep preview for live plot update
+                if preview_callback is not None:
+                    try:
+                        preview_callback(
+                            freq_hz_axis.tolist(), s11_db.tolist()
+                        )
+                    except Exception as exc:
+                        logger.warning("Preview callback error: %s", exc)
 
                 # Find minimum
                 min_idx = int(np.argmin(s11_db))
