@@ -742,7 +742,7 @@ class VNAPresenter(QObject):
 
         Checks gui/mvp/ directory for:
           - Any .cal file (most recently modified is selected)
-        Checks gui/ directory for:
+        Checks gui/mvp/ directory for:
           - sweep_config.yaml
         """
         gui_dir = Path(__file__).parent.parent
@@ -790,7 +790,7 @@ class VNAPresenter(QObject):
             )
 
         # Check for sweep config YAML
-        yaml_path = gui_dir / "sweep_config.yaml"
+        yaml_path = mvp_dir / "sweep_config.yaml"
         if yaml_path.exists():
             try:
                 with open(yaml_path) as f:
