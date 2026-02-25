@@ -1,6 +1,6 @@
 ---
 name: librevna-orchestrator
-description: Intelligent routing of LibreVNA-related requests to specialized agents (codebase-explorer, librevna-python-expert, pyqt6-gui-developer). Use when you need code understanding, script automation, or GUI development for the LibreVNA Vector Network Analyzer project.
+description: Intelligent routing of LibreVNA-related requests to specialized agents (codebase-explorer, librevna-python-expert, pyqt6-gui-developer, vna-data-analyst). Use when you need code understanding, script automation, GUI development, or S-parameter data analysis for the LibreVNA Vector Network Analyzer project.
 ---
 
 **Command Context**: LibreVNA project task orchestration and agent delegation workflow
@@ -35,6 +35,7 @@ The user provides a natural language request describing a LibreVNA-related task.
 - "Explain how script 2 loads the calibration file" → codebase-explorer
 - "Write a script that does an S11 sweep from 2.4 to 2.5 GHz" → librevna-python-expert
 - "Add a start/stop button to the GUI" → pyqt6-gui-developer
+- "Analyze the sweep CSV from today's run and plot S11" → vna-data-analyst
 
 **Examples of ambiguous requests**:
 - "Fix the plotting issue" → Ask: "Are you experiencing a display/rendering problem (GUI) or incorrect data from the VNA (SCPI)?"
@@ -49,6 +50,7 @@ The user provides a natural language request describing a LibreVNA-related task.
 | **codebase-explorer** | Code understanding, architecture analysis | Read/analyze existing code, trace dependencies, explain patterns | Cannot modify files, cannot run scripts |
 | **librevna-python-expert** | VNA automation, SCPI programming, USB protocol | Write/debug Python scripts, SCPI commands, protocol implementation | Specialized for LibreVNA programming only |
 | **pyqt6-gui-developer** | GUI development, real-time plotting | PyQt6/PySide6 interfaces, pyqtgraph plotting, MVP architecture | GUI-focused, not for backend VNA logic |
+| **vna-data-analyst** | S-parameter data analysis, RF metrics, visualization | Load/parse sweep CSVs, compute VSWR/return loss/impedance, generate plots, build Jupyter notebooks, compare IFBW configurations | Data analysis only — does not write VNA scripts or modify GUI code |
 
 ### Routing Keywords
 
@@ -59,6 +61,7 @@ Use this table to identify primary agent(s) based on user intent keywords:
 | "understand", "explain", "how does", "show me", "what is", "analyze existing", "trace", "find where" | codebase-explorer | Code inspection, architecture explanation, dependency tracing, pattern identification |
 | "write script", "create automation", "SCPI", "USB protocol", "calibration", "sweep", "measure", "query", "streaming server" | librevna-python-expert | Script creation, VNA automation, SCPI command sequences, USB direct access |
 | "GUI", "plot", "real-time", "PyQt", "PySide", "MVP", "widget", "display", "button", "window", "interface" | pyqt6-gui-developer | GUI development, plotting, UI debugging, signal/slot connections |
+| "analyze data", "CSV", "XLSX", "sweep data", "VSWR", "return loss", "impedance", "Smith chart", "notebook", "IFBW comparison", "sweep rate", "S11 statistics", "visualize measurements", "data collection results" | vna-data-analyst | Post-run data processing, RF metric computation, matplotlib/plotly visualizations, Jupyter notebook generation, multi-IFBW performance comparison |
 
 ### Multi-Agent Scenarios
 
@@ -77,10 +80,18 @@ Some requests require sequential or parallel agent collaboration:
    - First: codebase-explorer (trace data flow from SCPI to plot)
    - Then: Determine if issue is in SCPI (librevna-python-expert) or plotting (pyqt6-gui-developer)
 
+4. **"Run a sweep collection and then analyze the results"**
+   - First: librevna-python-expert (write/run the sweep collection script)
+   - Then: vna-data-analyst (process and visualize the resulting CSV/XLSX)
+
 **Parallel (independent work)**:
 - **"Document the SCPI wrapper and create a GUI test harness"**
   - Parallel: codebase-explorer (analyze and document libreVNA.py)
   - Parallel: pyqt6-gui-developer (create GUI harness)
+
+- **"Compare IFBW configurations AND document the script that generates them"**
+  - Parallel: vna-data-analyst (load CSVs, compare 50kHz/10kHz/1kHz sweep rates and S11 stability)
+  - Parallel: codebase-explorer (explain how script 6 dispatches IFBW iterations)
 
 ## Execution Flow
 
@@ -99,6 +110,7 @@ Based on parsing results:
 - If intent is "understand" and scope is "existing code" → codebase-explorer
 - If intent is "create/modify" and scope is "script/SCPI" → librevna-python-expert
 - If intent is "create/modify/debug" and scope is "GUI" → pyqt6-gui-developer
+- If intent is "analyze/visualize/compare" and scope is "collected measurement data" → vna-data-analyst
 
 **Multi-agent tasks** → Invoke sequentially or in parallel:
 - Sequential: When later agent depends on first agent's output
@@ -112,7 +124,7 @@ Based on parsing results:
 ```
 Task tool parameters:
 - agent: {selected_agent_name}
-- working_directory: /home/user/jeffrymahbuubi/PROJECTS/7-LibreVNA-Vector-Network-Analyzer
+- working_directory: {project root — same directory that contains .claude/}
 - prompt: {user's exact request}
 ```
 
@@ -127,12 +139,12 @@ Task tool parameters:
 ```
 Task tool call 1:
 - agent: agent_a
-- working_directory: /home/user/jeffrymahbuubi/PROJECTS/7-LibreVNA-Vector-Network-Analyzer
+- working_directory: {project root — same directory that contains .claude/}
 - prompt: {task_a}
 
 Task tool call 2:
 - agent: agent_b
-- working_directory: /home/user/jeffrymahbuubi/PROJECTS/7-LibreVNA-Vector-Network-Analyzer
+- working_directory: {project root — same directory that contains .claude/}
 - prompt: {task_b}
 ```
 
@@ -255,7 +267,24 @@ I'm dispatching two agents in parallel:
 [pyqt6-gui-developer output...]
 ```
 
-### Example 5: Ambiguous Request (Clarification)
+### Example 5: Single-Agent (Data Analysis)
+
+**User**: "I just ran a 30-sweep collection at 50kHz IFBW. Analyze the sweep rate consistency and plot S11 return loss."
+
+**Orchestrator Action**:
+- Intent: analyze/visualize
+- Scope: collected measurement data (CSV/XLSX in `data/`)
+- Agent: vna-data-analyst
+- Routing: Single-agent, direct
+
+**Output to User**:
+```
+I'm using the vna-data-analyst agent to process your sweep collection and generate a full analysis.
+
+[vna-data-analyst output...]
+```
+
+### Example 7: Ambiguous Request (Clarification)
 
 **User**: "Fix the sweep timing issue."
 
@@ -276,7 +305,7 @@ Are you experiencing:
 Please specify which scenario applies, or describe the symptoms you're seeing.
 ```
 
-### Example 6: Cross-Domain Debugging
+### Example 8: Cross-Domain Debugging
 
 **User**: "The GUI shows S11 data but the phase values look wrong. Help me debug this."
 
@@ -303,14 +332,14 @@ Based on the analysis, the phase calculation happens in the SCPI backend (libreV
 ## Prerequisites
 
 - LibreVNA project repository structure as documented in CLAUDE.md
-- Access to specialized agents: codebase-explorer, librevna-python-expert, pyqt6-gui-developer
+- Access to specialized agents: codebase-explorer, librevna-python-expert, pyqt6-gui-developer, vna-data-analyst
 - Task tool execution permissions
-- Proper working directory: `/home/user/jeffrymahbuubi/PROJECTS/7-LibreVNA-Vector-Network-Analyzer`
+- Working directory: the project root (the directory containing `.claude/`) — resolved at runtime, no hardcoded path. Works on both Windows and Linux.
 
 ## Design Rationale
 
 **Why an orchestrator?**
-- The LibreVNA project spans three distinct domains (code analysis, VNA automation, GUI development)
+- The LibreVNA project spans four distinct domains (code analysis, VNA automation, GUI development, data analysis)
 - Each specialized agent has deep knowledge but narrow focus
 - Users often don't know which agent to invoke—they just describe their goal
 - Orchestrator provides a single entry point with intelligent routing
