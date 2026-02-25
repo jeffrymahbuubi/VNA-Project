@@ -2,19 +2,22 @@
 """
 6_librevna_gui_mode_sweep_test.py
 -----------------------------------
-Unified single-sweep / continuous-sweep benchmark for LibreVNA.
+Unified single-sweep / continuous-sweep benchmark and physiological-signal
+monitor for LibreVNA.
 
 Reads sweep frequency range and point count from the calibration file
 (.cal, JSON format) and remaining parameters (stimulus level, averaging,
-IFBW values) from sweep_config.yaml.  Runs the requested mode (single or
-continuous) across every IFBW value listed in the config, and produces
-both a console PrettyTable summary and a directory-based CSV bundle.
+IFBW values) from sweep_config.yaml.  Runs the requested mode (single,
+continuous, or monitor) and produces the appropriate output.
 
 Class hierarchy
 ---------------
     BaseVNASweep            (ABC)  -- shared lifecycle, GUI, cal, CSV export
     SingleModeSweep         (BaseVNASweep)  -- single-sweep trigger + poll
     ContinuousModeSweep     (BaseVNASweep)  -- streaming callback loop
+    MonitorModeSweep        (ContinuousModeSweep)
+                            -- physiological signal capture; warm-up + gated
+                               logging; exports Dataflux-compatible CSV
     VNAGUIModeSweepTest     (SingleModeSweep, ContinuousModeSweep)
                             -- dispatches to the correct parent based on mode
 
@@ -40,7 +43,7 @@ SCPI commands used -- all documented in ProgrammingGuide.pdf
 
 Prerequisites
 -------------
-CONTINUOUS MODE:
+CONTINUOUS / MONITOR MODE:
   * The VNA Calibrated Data streaming server (port 19001) is automatically
     enabled by the script if not already running.  The first continuous-mode
     run will restart the GUI to enable streaming; subsequent runs will use
@@ -54,17 +57,44 @@ Usage
 -----
     uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal
     uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal --mode continuous
+    uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal --mode monitor
+    uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal --mode monitor --duration 60
+    uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal --mode monitor --log-interval 500
     uv run python 6_librevna_gui_mode_sweep_test.py --cal-file /path/to/cal.cal --config /path/to/other.yaml --no-save
 
 Output
 ------
-If save_data is enabled (default), produces:
-    data/YYYYMMDD/{mode}_sweep_test_{YYYYMMDD}_{HHMMSS}/
-        s11_sweep_1.csv
-        s11_sweep_2.csv
+DEFAULT / SINGLE / CONTINUOUS MODES:
+    If save_data is enabled (default), produces:
+        data/YYYYMMDD/{mode}_sweep_test_{YYYYMMDD}_{HHMMSS}/
+            s11_sweep_1.csv
+            s11_sweep_2.csv
+            ...
+            s11_sweep_N.csv
+            summary.txt
+
+MONITOR MODE:
+    Produces a single Dataflux-compatible CSV:
+        data/YYYYMMDD/vna_monitor_{YYYYMMDD}_{HHMMSS}.csv
+
+    CSV header format:
+        Application,VNA-DATAFLUX
+        VNA Model,LibreVNA
+        VNA Serial,<serial>
+        File Name,<filename>
+        Start DateTime,<ISO 8601>
+        Number of Data,<row count>
+        Log Interval(ms),<effective ms>
+        Freq Start(MHz),<start>
+        Freq Stop(MHz),<stop>
+        Freq Span(MHz),<span>
+        IF Bandwidth(KHz),<ifbw>
+        Points,<n>
+        (blank)
+        (blank)
+        Time,Marker Stimulus (Hz),Marker Y Real Value (dB)
+        HH:MM:SS.ffffff,+X.XXXXXXXXXE+008,-X.XXXXXXXXXE+000
         ...
-        s11_sweep_N.csv
-        summary.txt
 """
 
 import sys
@@ -165,6 +195,20 @@ class SweepResult:
     all_timestamps: list = field(default_factory=list)  # list[list[float]] [sweep_idx][point_idx] epoch timestamps
     noise_floor: float = 0.0  # filled by compute_metrics
     trace_jitter: float = 0.0  # filled by compute_metrics
+
+
+# ---------------------------------------------------------------------------
+# MonitorRecord dataclass
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class MonitorRecord:
+    """One logged data point captured during Monitor Mode."""
+
+    timestamp: datetime   # wall-clock time of the completed sweep
+    freq_hz: float        # frequency (Hz) where S11 is minimum
+    s11_db: float         # S11 magnitude (dB) at that frequency
 
 
 # ===========================================================================
@@ -296,7 +340,7 @@ class BaseVNASweep(ABC):
         ----------
         config_path   : str   -- absolute path to the YAML config file.
         cal_file_path : str   -- path to the calibration file (.cal).
-        mode          : str   -- "single" or "continuous".
+        mode          : str   -- "single", "continuous", or "monitor".
         summary       : bool  -- if True, print the PrettyTable at the end.
         save_data     : bool  -- if True, write the CSV bundle.
         """
@@ -325,8 +369,23 @@ class BaseVNASweep(ABC):
         self.avg_count = int(cfg["avg_count"])
         self.num_sweeps = int(cfg["num_sweeps"])
 
-        # Normalise ifbw_values: accept a single int OR a list of ints.
-        raw_ifbw = tgt["ifbw_values"]
+        # -- Normalise ifbw_values: accept new target.default.ifbw_values
+        #    or fall back to legacy flat target.ifbw_values with a deprecation
+        #    warning.  MonitorModeSweep overrides this entirely.
+        if "default" in tgt:
+            raw_ifbw = tgt["default"]["ifbw_values"]
+        elif "ifbw_values" in tgt:
+            print(
+                "  [DEPRECATION WARNING] sweep_config.yaml: 'target.ifbw_values' "
+                "is deprecated.  Move it under 'target.default.ifbw_values'."
+            )
+            raw_ifbw = tgt["ifbw_values"]
+        else:
+            raise KeyError(
+                "sweep_config.yaml: 'target' must contain either "
+                "'default.ifbw_values' or the legacy 'ifbw_values' key."
+            )
+
         if isinstance(raw_ifbw, list):
             self.ifbw_values = [int(v) for v in raw_ifbw]
         else:
@@ -1503,6 +1562,599 @@ class ContinuousModeSweep(BaseVNASweep):
 
 
 # ===========================================================================
+# MonitorModeSweep
+# ===========================================================================
+
+
+class MonitorModeSweep(ContinuousModeSweep):
+    """
+    Physiological signal capture mode (Monitor Mode -- F02).
+
+    Inherits the streaming callback infrastructure from ContinuousModeSweep
+    and adds:
+
+    1. Warm-up phase: run N sweeps to measure the actual sweep time,
+       compute mean_sweep_time_ms.
+
+    2. Log-interval gating: only record a data point if at least
+       effective_log_interval_ms have elapsed since the last log.
+       effective_log_interval_ms = max(user_requested_ms, mean_sweep_time_ms).
+
+    3. Recording loop: runs until duration_s wall-clock seconds have
+       elapsed (if duration_s > 0) or until KeyboardInterrupt (if
+       duration_s == 0 -- continuous until Ctrl-C).
+
+    4. Output: single Dataflux-compatible CSV exported to
+       data/YYYYMMDD/vna_monitor_YYYYMMDD_HHMMSS.csv
+
+    Configuration is read from sweep_config.yaml 'target.monitor' section
+    and may be overridden by CLI flags (--log-interval, --duration).
+
+    YAML keys (target.monitor):
+        ifbw_hz          : int   -- IFBW for monitor mode
+        log_interval_ms  : "auto" or int -- "auto" = log every completed sweep
+        duration_s       : float -- 0 = Ctrl-C; >0 = stop after N seconds
+        warmup_sweeps    : int   -- sweeps used to estimate sweep time
+
+    CLI overrides:
+        --log-interval   : "auto" or int ms (overrides YAML)
+        --duration       : float seconds (overrides YAML)
+    """
+
+    def __init__(
+        self,
+        config_path,
+        cal_file_path,
+        summary=True,
+        save_data=True,
+        log_interval_override=None,
+        duration_override=None,
+    ):
+        """
+        Parameters
+        ----------
+        config_path          : str   -- absolute path to YAML config.
+        cal_file_path        : str   -- path to calibration file (.cal).
+        summary              : bool  -- unused in monitor mode (no PrettyTable),
+                                        kept for API compatibility.
+        save_data            : bool  -- if True, export the Dataflux CSV.
+        log_interval_override: str or int or None
+                               -- CLI override for log_interval_ms.
+                                  "auto", an integer (ms), or None to use YAML.
+        duration_override    : float or None
+                               -- CLI override for duration_s, or None to use YAML.
+        """
+        # Call ContinuousModeSweep.__init__ -> BaseVNASweep.__init__
+        # mode="monitor" is stored on self.mode; BaseVNASweep reads
+        # target.default.ifbw_values for self.ifbw_values (not used in
+        # monitor mode, but the parse is harmless).
+        super().__init__(
+            config_path=config_path,
+            cal_file_path=cal_file_path,
+            mode="monitor",
+            summary=summary,
+            save_data=save_data,
+        )
+
+        # -- Read monitor-specific config from YAML ----------------------------
+        with open(config_path, "r") as fh:
+            raw = yaml.safe_load(fh)
+
+        mon = raw.get("target", {}).get("monitor", {})
+
+        self.monitor_ifbw_hz = int(mon.get("ifbw_hz", 50000))
+        self.warmup_sweeps = int(mon.get("warmup_sweeps", 5))
+
+        # Log interval: YAML value (may be "auto" or int)
+        yaml_log_interval = mon.get("log_interval_ms", "auto")
+
+        # Duration: YAML value
+        yaml_duration_s = float(mon.get("duration_s", 0))
+
+        # Apply CLI overrides
+        if log_interval_override is not None:
+            self._raw_log_interval = log_interval_override
+        else:
+            self._raw_log_interval = yaml_log_interval
+
+        if duration_override is not None:
+            self.duration_s = float(duration_override)
+        else:
+            self.duration_s = yaml_duration_s
+
+        # Override the base-class ifbw_values so that configure_sweep gets
+        # the correct single IFBW when called from our run() method.
+        self.ifbw_values = [self.monitor_ifbw_hz]
+
+        # Will be filled after warm-up
+        self.mean_sweep_time_ms = None
+        self.effective_log_interval_ms = None
+
+        # Records list -- populated during _monitor_loop
+        self._monitor_records = []  # list[MonitorRecord]
+
+        # VNA serial -- populated in run() after connect_and_verify
+        self._vna_serial = "unknown"
+
+    # -----------------------------------------------------------------------
+    # Warm-up
+    # -----------------------------------------------------------------------
+
+    def _warmup(self, vna, ifbw_hz, warmup_sweeps):
+        """
+        Run warmup_sweeps continuous sweeps and return mean_sweep_time_ms.
+
+        Re-uses _continuous_sweep_loop with num_sweeps temporarily set to
+        warmup_sweeps.
+
+        Parameters
+        ----------
+        vna           : libreVNA
+        ifbw_hz       : int
+        warmup_sweeps : int
+
+        Returns
+        -------
+        float
+            Mean sweep duration in milliseconds over the warm-up sweeps.
+        """
+        _section("MONITOR MODE -- WARM-UP PHASE ({} sweeps)".format(warmup_sweeps))
+
+        # Temporarily override num_sweeps for the warm-up run
+        original_num_sweeps = self.num_sweeps
+        self.num_sweeps = warmup_sweeps
+
+        try:
+            result = self._continuous_sweep_loop(vna, ifbw_hz)
+        finally:
+            # Always restore num_sweeps regardless of success/failure
+            self.num_sweeps = original_num_sweeps
+
+        if not result.sweep_times:
+            raise RuntimeError(
+                "Warm-up phase produced no completed sweeps -- "
+                "check streaming server connectivity."
+            )
+
+        mean_ms = float(np.mean(result.sweep_times)) * 1000.0
+        print(
+            "\n  Warm-up result  : {} sweeps, mean sweep time = {:.1f} ms".format(
+                len(result.sweep_times), mean_ms
+            )
+        )
+        return mean_ms
+
+    # -----------------------------------------------------------------------
+    # Effective log interval resolution
+    # -----------------------------------------------------------------------
+
+    def _resolve_log_interval(self, mean_sweep_time_ms):
+        """
+        Compute effective_log_interval_ms from the raw user setting and the
+        measured sweep time.
+
+        Rules
+        -----
+        - "auto"    : effective = mean_sweep_time_ms  (log every sweep)
+        - int N     : effective = max(N, mean_sweep_time_ms)
+                      Prints a warning if N < mean_sweep_time_ms (clamped).
+
+        Parameters
+        ----------
+        mean_sweep_time_ms : float
+
+        Returns
+        -------
+        float
+            effective_log_interval_ms
+        """
+        raw = self._raw_log_interval
+
+        if str(raw).lower() == "auto":
+            effective = mean_sweep_time_ms
+            print(
+                "  Log interval    : auto -> {:.1f} ms  "
+                "(= measured sweep time)".format(effective)
+            )
+        else:
+            try:
+                requested_ms = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "--log-interval must be 'auto' or an integer ms, "
+                    "got: '{}'".format(raw)
+                )
+            if requested_ms < mean_sweep_time_ms:
+                print(
+                    "  [WARN] --log-interval {} ms is smaller than the "
+                    "measured sweep time ({:.1f} ms).  "
+                    "Clamping to {:.1f} ms.".format(
+                        int(requested_ms), mean_sweep_time_ms, mean_sweep_time_ms
+                    )
+                )
+                effective = mean_sweep_time_ms
+            else:
+                effective = requested_ms
+                print(
+                    "  Log interval    : {:.1f} ms  "
+                    "(user-requested; >= sweep time)".format(effective)
+                )
+
+        return effective
+
+    # -----------------------------------------------------------------------
+    # Monitor loop
+    # -----------------------------------------------------------------------
+
+    def _monitor_loop(self, vna, ifbw_hz, effective_log_interval_ms, duration_s):
+        """
+        Run the continuous recording loop.
+
+        Each completed sweep: extract (timestamp, min_freq_hz, min_dB).
+        Gate by log interval: only append a record if elapsed since
+        last log >= effective_log_interval_ms.
+        Stop when duration_s wall-clock seconds have passed (if > 0),
+        or on KeyboardInterrupt (if duration_s == 0).
+
+        The method modifies self._monitor_records in-place.
+
+        Parameters
+        ----------
+        vna                       : libreVNA
+        ifbw_hz                   : int
+        effective_log_interval_ms : float
+        duration_s                : float  (0 = run until Ctrl-C)
+        """
+        _section(
+            "MONITOR MODE -- RECORDING  (IFBW={} kHz, interval={:.1f} ms, "
+            "duration={})".format(
+                ifbw_hz // 1000,
+                effective_log_interval_ms,
+                "{:.0f} s".format(duration_s) if duration_s > 0 else "Ctrl-C",
+            )
+        )
+
+        # Frequency axis (shared across all sweeps)
+        freq_hz_axis = np.linspace(
+            float(self.start_freq_hz), float(self.stop_freq_hz), self.num_points
+        )
+
+        # Mutable state for the monitor callback  --------------------------------
+        # We use a separate monitor state dict (not _SweepState) because we
+        # need to accumulate records, track last-log time, and handle
+        # duration/stop without re-using the done_event mechanism.
+
+        mon_lock = threading.Lock()
+        stop_event = threading.Event()
+
+        # Shared mutable dict -- accessed by both the callback and the main thread.
+        # Using a dict so that the closure captures the reference (not the value).
+        mon_state = {
+            "current_s11": [],         # list[complex], current in-progress sweep
+            "sweep_start_time": 0.0,   # epoch time of first point in current sweep
+            "last_log_time_ms": None,  # epoch time (ms) of last appended record
+            "record_count": 0,         # total records appended
+        }
+
+        effective_log_interval_s = effective_log_interval_ms / 1000.0
+
+        def _monitor_callback(data):
+            """Streaming callback: one call per sweep point."""
+            if stop_event.is_set():
+                return  # loop is shutting down -- ignore further points
+            if "Z0" not in data:
+                return
+
+            point_num = data["pointNum"]
+            s11_complex = data["measurements"].get("S11", complex(0, 0))
+            point_time = time.time()
+
+            with mon_lock:
+                if point_num == 0:
+                    mon_state["sweep_start_time"] = point_time
+                    mon_state["current_s11"] = []
+
+                mon_state["current_s11"].append(s11_complex)
+
+                if point_num == self.num_points - 1:
+                    # End of sweep -- process if complete
+                    collected = list(mon_state["current_s11"])
+                    if len(collected) != self.num_points:
+                        # Partial sweep -- discard
+                        return
+
+                    sweep_ts = datetime.now()
+
+                    # Convert to dB
+                    s11_db = np.array([
+                        20.0 * math.log10(max(abs(g), 1e-12))
+                        for g in collected
+                    ])
+
+                    # Find minimum
+                    min_idx = int(np.argmin(s11_db))
+                    min_freq = float(freq_hz_axis[min_idx])
+                    min_s11_db = float(s11_db[min_idx])
+
+                    # Log-interval gating
+                    last_ms = mon_state["last_log_time_ms"]
+                    now_ms = point_time * 1000.0
+                    if (
+                        last_ms is None
+                        or (now_ms - last_ms) >= effective_log_interval_ms
+                    ):
+                        self._monitor_records.append(
+                            MonitorRecord(
+                                timestamp=sweep_ts,
+                                freq_hz=min_freq,
+                                s11_db=min_s11_db,
+                            )
+                        )
+                        mon_state["last_log_time_ms"] = now_ms
+                        mon_state["record_count"] += 1
+
+                        count = mon_state["record_count"]
+                        print(
+                            "    [{:>6d}]  {}  freq={:.3f} MHz  S11={:.2f} dB".format(
+                                count,
+                                sweep_ts.strftime("%H:%M:%S.%f"),
+                                min_freq / 1e6,
+                                min_s11_db,
+                            )
+                        )
+
+        # Register monitor callback on the streaming port
+        vna.add_live_callback(STREAMING_PORT, _monitor_callback)
+        print("  Streaming       : monitor callback registered on port {}".format(
+            STREAMING_PORT
+        ))
+
+        # Start continuous acquisition
+        vna.cmd(":VNA:ACQ:STOP")
+        time.sleep(0.1)  # drain stale data
+        vna.cmd(":VNA:ACQ:SINGLE FALSE")
+        vna.cmd(":VNA:ACQ:RUN")
+        print("  Acquisition     : started (continuous)")
+
+        wall_start = time.time()
+
+        if duration_s > 0:
+            print(
+                "  Recording for   : {:.0f} s  (press Ctrl-C to stop early)".format(
+                    duration_s
+                )
+            )
+        else:
+            print("  Recording       : continuous -- press Ctrl-C to stop")
+
+        try:
+            while True:
+                if duration_s > 0 and (time.time() - wall_start) >= duration_s:
+                    print("\n  Duration reached: {:.0f} s elapsed".format(
+                        time.time() - wall_start
+                    ))
+                    break
+                time.sleep(0.05)  # yield; callback runs on libreVNA TCP thread
+        except KeyboardInterrupt:
+            print("\n  Ctrl-C received : stopping recording")
+
+        # Signal the callback to stop accepting new points
+        stop_event.set()
+
+        # Stop acquisition
+        vna.cmd(":VNA:ACQ:STOP")
+        print("  Acquisition     : stopped")
+
+        # Restore single mode
+        vna.cmd(":VNA:ACQ:SINGLE TRUE")
+        print("  Sweep mode      : restored to SINGLE (TRUE)")
+
+        # Remove the monitor callback
+        vna.remove_live_callback(STREAMING_PORT, _monitor_callback)
+        print("  Streaming       : monitor callback removed")
+
+        print(
+            "\n  Total records   : {}".format(len(self._monitor_records))
+        )
+
+    # -----------------------------------------------------------------------
+    # Dataflux CSV export
+    # -----------------------------------------------------------------------
+
+    def _export_dataflux_csv(
+        self, records, vna_serial, ifbw_hz, effective_log_interval_ms
+    ):
+        """
+        Write a Dataflux-compatible CSV file.
+
+        Format
+        ------
+        Application,VNA-DATAFLUX
+        VNA Model,LibreVNA
+        VNA Serial,<serial>
+        File Name,<filename>
+        Start DateTime,<ISO 8601>
+        Number of Data,<row count>
+        Log Interval(ms),<effective_log_interval_ms>
+        Freq Start(MHz),<start_freq>
+        Freq Stop(MHz),<stop_freq>
+        Freq Span(MHz),<span>
+        IF Bandwidth(KHz),<ifbw_khz>
+        Points,<num_points>
+        (blank line)
+        (blank line)
+        Time,Marker Stimulus (Hz),Marker Y Real Value (dB)
+        HH:MM:SS.ffffff,+X.XXXXXXXXXE+008,-X.XXXXXXXXXE+000
+        ...
+
+        Parameters
+        ----------
+        records                   : list[MonitorRecord]
+        vna_serial                : str
+        ifbw_hz                   : int
+        effective_log_interval_ms : float
+
+        Returns
+        -------
+        str
+            Absolute path to the written CSV file.
+        """
+        if not records:
+            print("  [WARN] No monitor records to export -- CSV not written.")
+            return None
+
+        today = datetime.now().strftime("%Y%m%d")
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = "vna_monitor_{}.csv".format(timestamp_str)
+
+        out_dir = os.path.join(DATA_DIR, today)
+        os.makedirs(out_dir, exist_ok=True)
+        csv_path = os.path.join(out_dir, filename)
+
+        start_dt = records[0].timestamp
+        num_data = len(records)
+        freq_start_mhz = self.start_freq_hz / 1e6
+        freq_stop_mhz = self.stop_freq_hz / 1e6
+        freq_span_mhz = freq_stop_mhz - freq_start_mhz
+        ifbw_khz = ifbw_hz / 1000.0
+
+        with open(csv_path, "w", newline="") as fh:
+            writer = csv.writer(fh)
+
+            # -- Metadata header block (12 lines) ---------------------------------
+            writer.writerow(["Application", "VNA-DATAFLUX"])
+            writer.writerow(["VNA Model", "LibreVNA"])
+            writer.writerow(["VNA Serial", vna_serial])
+            writer.writerow(["File Name", filename])
+            writer.writerow(["Start DateTime", start_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")])
+            writer.writerow(["Number of Data", num_data])
+            writer.writerow(["Log Interval(ms)", "{:.1f}".format(effective_log_interval_ms)])
+            writer.writerow(["Freq Start(MHz)", "{:.6f}".format(freq_start_mhz)])
+            writer.writerow(["Freq Stop(MHz)", "{:.6f}".format(freq_stop_mhz)])
+            writer.writerow(["Freq Span(MHz)", "{:.6f}".format(freq_span_mhz)])
+            writer.writerow(["IF Bandwidth(KHz)", "{:.3f}".format(ifbw_khz)])
+            writer.writerow(["Points", self.num_points])
+
+            # -- Two blank lines --------------------------------------------------
+            writer.writerow([])
+            writer.writerow([])
+
+            # -- Column header ----------------------------------------------------
+            writer.writerow(
+                ["Time", "Marker Stimulus (Hz)", "Marker Y Real Value (dB)"]
+            )
+
+            # -- Data rows --------------------------------------------------------
+            for rec in records:
+                time_str = rec.timestamp.strftime("%H:%M:%S.%f")
+                # Scientific notation with 9 decimal places, explicit sign
+                freq_str = "{:+.9E}".format(rec.freq_hz)
+                s11_str = "{:+.9E}".format(rec.s11_db)
+                writer.writerow([time_str, freq_str, s11_str])
+
+        print("  Dataflux CSV    : {}".format(csv_path))
+        return csv_path
+
+    # -----------------------------------------------------------------------
+    # run() override
+    # -----------------------------------------------------------------------
+
+    def run(self):
+        """
+        Monitor Mode top-level entry point.
+
+        Sequence
+        --------
+        1.  start_gui()
+        2.  connect_and_verify() -- captures VNA serial from *IDN?
+        3.  enable_streaming_server() (may restart GUI)
+        4.  load_calibration()
+        5.  configure_sweep()  (continuous-mode SCPI config)
+        6.  pre_loop_reset()   (register streaming callback once)
+        7.  _warmup()          (N sweeps to measure actual sweep time)
+        8.  _resolve_log_interval() -- compute effective_log_interval_ms
+        9.  _monitor_loop()    (record until duration or Ctrl-C)
+        10. post_loop_teardown() (stop acquisition, restore SINGLE, remove callback)
+        11. _export_dataflux_csv() (if self.save_data)
+        12. stop_gui()         (in finally block)
+        """
+        gui_proc = self.start_gui()
+        try:
+            vna = self.connect_and_verify()
+
+            # Capture VNA serial from *IDN? for the CSV header
+            try:
+                idn_raw = vna.query("*IDN?")
+                parts = [p.strip() for p in idn_raw.split(",")]
+                # *IDN? format: Manufacturer,Model,Serial,SWVersion
+                self._vna_serial = parts[2] if len(parts) > 2 else "unknown"
+            except Exception:
+                self._vna_serial = "unknown"
+
+            # Enable streaming server (monitor mode requires it)
+            needs_restart = self.enable_streaming_server(vna)
+            if needs_restart:
+                _section("RESTARTING GUI")
+                self.stop_gui(gui_proc)
+                gui_proc = self.start_gui()
+                vna = self.connect_and_verify()
+                # Re-capture serial after restart
+                try:
+                    idn_raw = vna.query("*IDN?")
+                    parts = [p.strip() for p in idn_raw.split(",")]
+                    self._vna_serial = parts[2] if len(parts) > 2 else "unknown"
+                except Exception:
+                    pass
+
+            self.load_calibration(vna)
+
+            ifbw_hz = self.monitor_ifbw_hz
+
+            # Configure sweep (uses ContinuousModeSweep.configure_sweep)
+            self.configure_sweep(vna, ifbw_hz)
+
+            # Register streaming callback once (pre_loop_reset from ContinuousModeSweep)
+            self.pre_loop_reset(vna)
+
+            # Warm-up: measure actual sweep time
+            self.mean_sweep_time_ms = self._warmup(vna, ifbw_hz, self.warmup_sweeps)
+
+            # Resolve effective log interval
+            self.effective_log_interval_ms = self._resolve_log_interval(
+                self.mean_sweep_time_ms
+            )
+
+            # Clear any records that might have accumulated during warm-up
+            self._monitor_records = []
+
+            # Run the recording loop
+            self._monitor_loop(
+                vna,
+                ifbw_hz,
+                self.effective_log_interval_ms,
+                self.duration_s,
+            )
+
+            # post_loop_teardown: stop acquisition, restore SINGLE TRUE, remove callback
+            self.post_loop_teardown(vna)
+
+            # Export Dataflux CSV
+            if self.save_data:
+                _section("SAVING MONITOR DATA")
+                self._export_dataflux_csv(
+                    self._monitor_records,
+                    self._vna_serial,
+                    ifbw_hz,
+                    self.effective_log_interval_ms,
+                )
+
+            print()  # trailing blank line
+
+        finally:
+            self.stop_gui(gui_proc)
+
+
+# ===========================================================================
 # VNAGUIModeSweepTest  --  concrete facade
 # ===========================================================================
 
@@ -1576,27 +2228,75 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mode",
-        choices=["single", "continuous"],
+        choices=["single", "continuous", "monitor"],
         default="single",
-        help="Sweep mode (default: single)",
+        help="Sweep mode: single, continuous, or monitor (default: single)",
+    )
+    parser.add_argument(
+        "--log-interval",
+        default=None,
+        metavar="MS_OR_AUTO",
+        help=(
+            "Monitor mode only. Log interval in ms, or 'auto' to use the "
+            "measured sweep time (default: read from sweep_config.yaml "
+            "target.monitor.log_interval_ms)"
+        ),
+    )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Monitor mode only. Recording duration in seconds.  "
+            "0 = continuous until Ctrl-C (default: read from sweep_config.yaml "
+            "target.monitor.duration_s)"
+        ),
     )
     parser.add_argument(
         "--no-summary",
         action="store_true",
-        help="Suppress console summary",
+        help="Suppress console summary (single/continuous modes)",
     )
     parser.add_argument(
         "--no-save",
         action="store_true",
-        help="Skip CSV bundle export",
+        help="Skip output file export",
     )
     args = parser.parse_args()
 
-    test = VNAGUIModeSweepTest(
-        config_path=args.config,
-        cal_file_path=args.cal_file,
-        mode=args.mode,
-        summary=not args.no_summary,
-        save_data=not args.no_save,
-    )
-    test.run()
+    if args.mode == "monitor":
+        # Resolve --log-interval: convert to int if it looks like a number,
+        # leave as "auto" string otherwise, or pass None to let YAML decide.
+        log_interval_override = None
+        if args.log_interval is not None:
+            if args.log_interval.strip().lower() == "auto":
+                log_interval_override = "auto"
+            else:
+                try:
+                    log_interval_override = int(args.log_interval)
+                except ValueError:
+                    parser.error(
+                        "--log-interval must be 'auto' or an integer ms, "
+                        "got: '{}'".format(args.log_interval)
+                    )
+
+        monitor = MonitorModeSweep(
+            config_path=args.config,
+            cal_file_path=args.cal_file,
+            summary=not args.no_summary,
+            save_data=not args.no_save,
+            log_interval_override=log_interval_override,
+            duration_override=args.duration,
+        )
+        monitor.run()
+
+    else:
+        test = VNAGUIModeSweepTest(
+            config_path=args.config,
+            cal_file_path=args.cal_file,
+            mode=args.mode,
+            summary=not args.no_summary,
+            save_data=not args.no_save,
+        )
+        test.run()
