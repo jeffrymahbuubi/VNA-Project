@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "auto-py-to-exe>=2.48.1",
     "cisco-ai-a2a-scanner>=1.0.1",
     "cisco-ai-mcp-scanner>=4.1.0",
     "cisco-ai-skill-scanner>=1.0.2",
