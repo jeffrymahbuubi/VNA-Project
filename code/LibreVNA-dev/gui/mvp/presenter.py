@@ -23,10 +23,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from .model import VNADataModel, SweepConfig
+from .model import VNADataModel, SweepConfig, MonitorConfig, MonitorRecord
 from .view import VNAMainWindow
 from .backend_wrapper import (
-    GUIVNASweepAdapter, probe_device_serial,
+    GUIVNASweepAdapter, GUIVNAMonitorAdapter, probe_device_serial,
     _is_scpi_server_running, _start_gui_subprocess,
 )
 from .vna_backend import SCPI_HOST, SCPI_PORT, STREAMING_PORT, _MODULE_DIR
@@ -477,6 +477,155 @@ class VNASweepWorker(QThread):
                 self.adapter.stop_lifecycle()
 
 
+class VNAMonitorWorker(QThread):
+    """
+    Background worker thread for VNA monitor mode operations.
+
+    Manages the full monitor lifecycle: start GUI + connect, warmup sweeps
+    to measure actual sweep time, then continuous recording of per-sweep
+    scalar data (min-frequency S11) until stopped or duration expires.
+
+    Communicates progress via Qt signals for thread-safe GUI updates.
+    The streaming callback runs on libreVNA's TCP thread and emits
+    monitor_point signals which Qt marshals to the GUI thread.
+    """
+
+    # Progress signals (emitted TO presenter on GUI thread)
+    lifecycle_started = Signal(dict)       # device info: {'serial': ..., 'idn': ...}
+    warmup_completed = Signal(float)       # mean_sweep_time_ms
+    monitor_point = Signal(object)         # MonitorRecord
+    monitor_saved = Signal(str)            # CSV path
+    error_occurred = Signal(str)           # error message
+
+    def __init__(
+        self,
+        config_dict: dict,
+        calibration_file_path: str,
+        effective_log_interval_ms: float,
+        duration_s: float,
+        warmup_sweeps: int = 5,
+        parent=None,
+    ):
+        """
+        Initialize monitor worker.
+
+        Args:
+            config_dict: Monitor configuration for GUIVNAMonitorAdapter.
+                Must contain: 'stim_lvl_dbm', 'avg_count', 'ifbw_hz',
+                'warmup_sweeps', 'num_sweeps'.
+            calibration_file_path: Calibration filename (resolved relative
+                to _MODULE_DIR by the backend).
+            effective_log_interval_ms: Minimum interval between logged
+                points (0 = log every sweep, "auto" is resolved before
+                this worker is created).
+            duration_s: Recording duration in seconds. 0 = indefinite
+                (run until stop() is called).
+            warmup_sweeps: Number of warmup sweeps for timing estimation.
+            parent: Optional QObject parent.
+        """
+        super().__init__(parent)
+        self.config_dict = config_dict
+        self.cal_file_path = calibration_file_path
+        self.effective_log_interval_ms = effective_log_interval_ms
+        self.duration_s = duration_s
+        self.warmup_sweeps = warmup_sweeps
+        self._cancel_event = threading.Event()
+        self.adapter: Optional[GUIVNAMonitorAdapter] = None
+
+    def stop(self):
+        """
+        Request graceful shutdown of the monitor loop.
+
+        Sets the cancel event, which causes the run() wait loop to exit.
+        The worker will then stop recording, export CSV, and clean up.
+        Call wait() after this to block until the thread finishes.
+        """
+        self._cancel_event.set()
+
+    def run(self):
+        """
+        Main monitor loop - runs in background thread.
+
+        Sequence:
+          1. Create GUIVNAMonitorAdapter
+          2. start_lifecycle() -> emit lifecycle_started
+          3. run_warmup() -> emit warmup_completed with mean sweep time
+          4. start_recording(callback, effective_log_interval_ms)
+          5. Wait loop: check _cancel_event, check duration_s
+          6. stop_recording() -> emit monitor_saved with CSV path
+          7. stop_lifecycle()
+        """
+        try:
+            # Step 1: Create adapter
+            self.adapter = GUIVNAMonitorAdapter(
+                self.config_dict, self.cal_file_path
+            )
+
+            # Step 2: Start lifecycle (GUI + connect + cal + streaming)
+            device_info = self.adapter.start_lifecycle()
+            self.lifecycle_started.emit(device_info)
+
+            if self._cancel_event.is_set():
+                return
+
+            # Step 3: Run warmup sweeps
+            mean_ms = self.adapter.run_warmup(warmup_sweeps=self.warmup_sweeps)
+            self.warmup_completed.emit(mean_ms)
+
+            if self._cancel_event.is_set():
+                return
+
+            # Resolve effective log interval: if it was 0 (auto), use mean_ms
+            eff_log_ms = self.effective_log_interval_ms
+            if eff_log_ms <= 0:
+                eff_log_ms = mean_ms
+
+            # Step 4: Start recording with callback
+            def _point_callback(record):
+                """Called from streaming thread for each logged point."""
+                self.monitor_point.emit(record)
+
+            self.adapter.start_recording(
+                point_callback=_point_callback,
+                effective_log_interval_ms=eff_log_ms,
+            )
+
+            if self._cancel_event.is_set():
+                return
+
+            # Step 5: Wait loop
+            start_time = time.time()
+            while not self._cancel_event.wait(timeout=0.25):
+                # Check duration limit
+                if self.duration_s > 0:
+                    elapsed = time.time() - start_time
+                    if elapsed >= self.duration_s:
+                        logger.info(
+                            "Monitor duration reached (%.1f s)", self.duration_s
+                        )
+                        break
+
+            # Step 6: Stop recording and export CSV
+            csv_path = self.adapter.stop_recording()
+            if csv_path:
+                self.monitor_saved.emit(csv_path)
+            else:
+                self.monitor_saved.emit("")
+
+        except Exception as e:
+            import traceback
+            error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
+            self.error_occurred.emit(error_msg)
+
+        finally:
+            # Step 7: Stop lifecycle (teardown GUI + SCPI)
+            if self.adapter:
+                try:
+                    self.adapter.stop_lifecycle()
+                except Exception as exc:
+                    logger.warning("Monitor adapter stop_lifecycle error: %s", exc)
+
+
 class VNAPresenter(QObject):
     """
     Presenter - mediates between Model and View.
@@ -484,7 +633,7 @@ class VNAPresenter(QObject):
     Handles:
       - Auto-detection on startup (.cal and .yaml files)
       - User action signals from View
-      - Worker thread lifecycle
+      - Worker thread lifecycle (sweep and monitor modes)
       - Button enable/disable state machine
       - Thread-safe GUI updates from Worker signals
     """
@@ -514,6 +663,10 @@ class VNAPresenter(QObject):
         self._preview_worker: Optional[VNAPreviewWorker] = None
         self._previewing = False  # True when live preview is active
 
+        # Monitor worker state
+        self._monitor_worker: Optional[VNAMonitorWorker] = None
+        self._monitoring = False  # True when monitor recording is active
+
         # Current collection state
         self._current_ifbw_index = 0
         self._total_ifbw_count = 0
@@ -531,6 +684,7 @@ class VNAPresenter(QObject):
         self.view.load_config_requested.connect(self._on_load_config_requested)
         self.view.connect_device_requested.connect(self._on_connect_device_requested)
         self.view.config_changed.connect(self._on_config_changed)
+        self.view.mode_changed.connect(self._on_mode_changed)
         self.view.window_closing.connect(self._on_window_closing)
 
     # -----------------------------------------------------------------------
@@ -597,8 +751,11 @@ class VNAPresenter(QObject):
                 with open(yaml_path) as f:
                     config_dict = yaml.safe_load(f)
 
-                # Load into model (freq/points remain as zero placeholders)
+                # Load sweep config into model (freq/points remain as zero placeholders)
                 self.model.config = SweepConfig.from_dict(config_dict)
+
+                # Load monitor config from the same YAML
+                self.model.monitor_config = MonitorConfig.from_dict(config_dict)
 
                 # Re-apply cal-file freq/points onto the new config object.
                 # from_dict() does not read these from YAML; the cal file is
@@ -612,8 +769,14 @@ class VNAPresenter(QObject):
                             "Failed to re-apply cal file after YAML load: %s", e
                         )
 
-                # Populate view widgets
-                self.view.populate_sweep_config(self.model.config.to_dict())
+                # Populate view widgets (sweep config + monitor config)
+                monitor_dict = {
+                    "log_interval_ms": self.model.monitor_config.log_interval_ms,
+                }
+                self.view.populate_sweep_config(
+                    self.model.config.to_dict(),
+                    monitor_config=monitor_dict,
+                )
 
                 self.view.show_status_message(
                     f"Auto-loaded: {yaml_path.name}",
@@ -920,23 +1083,80 @@ class VNAPresenter(QObject):
 
     @Slot()
     def _on_collect_data_requested(self):
-        """Handle 'Collect Data' button click."""
+        """
+        Handle 'Collect Data' / 'Stop Monitoring' button click.
+
+        Dispatches to the appropriate mode based on the View's mode selection:
+          - "sanity_check" -> VNASweepWorker (existing sweep collection)
+          - "continuous_monitoring" -> VNAMonitorWorker (monitor mode)
+
+        If monitoring is already active (button shows "Stop Monitoring"),
+        clicking again stops the monitor worker gracefully.
+        """
+        # Handle stop-monitoring case: user clicked "Stop Monitoring"
+        if self._monitoring:
+            # Show feedback immediately
+            self.view.show_status_message("Stopping monitor...", timeout=0)
+
+            # Count records captured before disconnecting signals
+            record_count = len(self.model.monitor_records)
+
+            # Stop the worker (disconnects signals, waits for CSV export)
+            self._stop_monitor_worker()
+
+            # Show result
+            self.view.show_status_message(
+                f"Monitor stopped -- {record_count} points captured", timeout=0
+            )
+
+            # Re-probe device to restore connection and restart preview
+            self.model.device.connected = False
+            self._start_device_probe()
+            return
+
         if self._collecting:
-            return  # Already running
+            return  # Already running a sweep
 
         # Stop the live preview worker before starting collection.
         # The preview holds an SCPI connection and streaming callback that
-        # would conflict with the VNASweepWorker's own connections.
+        # would conflict with the worker's own connections.
         self._stop_preview_worker()
 
         # Stop any GUI subprocess started by the device probe to avoid port
-        # conflicts -- the VNASweepWorker starts its own GUI subprocess on
+        # conflicts -- the worker starts its own GUI subprocess on
         # the same SCPI port (19542).
         self._stop_probe_gui_process()
 
         # Read config from widgets
         config_dict = self.view.read_sweep_config()
+        selected_mode = config_dict.pop("mode", "sanity_check")
+        monitor_duration_s = config_dict.pop("monitor_duration_s", 0.0)
+        log_interval_ms_str = config_dict.pop("log_interval_ms", "auto")
 
+        # Validate calibration (required for both modes)
+        if not self.model.calibration.loaded or not self.model.calibration.file_path:
+            self.view.show_error_dialog(
+                "Calibration Missing",
+                "Please load a calibration file first."
+            )
+            return
+
+        if selected_mode == "continuous_monitoring":
+            self._start_monitor_mode(
+                config_dict, monitor_duration_s, log_interval_ms_str
+            )
+        else:
+            self._start_sanity_check_mode(config_dict)
+
+    def _start_sanity_check_mode(self, config_dict: dict):
+        """
+        Start Device Sanity Check mode using VNASweepWorker.
+
+        This is the existing sweep collection behavior.
+
+        Args:
+            config_dict: Sweep configuration from View (Hz units).
+        """
         # Validate config
         try:
             config = SweepConfig(**config_dict)
@@ -960,14 +1180,6 @@ class VNAPresenter(QObject):
         # Update model
         self.model.config = config
         self.model.clear_sweep_data()
-
-        # Validate calibration
-        if not self.model.calibration.loaded or not self.model.calibration.file_path:
-            self.view.show_error_dialog(
-                "Calibration Missing",
-                "Please load a calibration file first."
-            )
-            return
 
         # Clear plot
         self.view.clear_plot()
@@ -995,6 +1207,77 @@ class VNAPresenter(QObject):
 
         # Start worker
         self._worker.start()
+
+    def _start_monitor_mode(
+        self, config_dict: dict, duration_s: float, log_interval_ms_str: str
+    ):
+        """
+        Start Continuous Monitoring mode using VNAMonitorWorker.
+
+        Creates a monitor adapter config from the model's monitor_config
+        and launches the monitor worker thread.
+
+        Args:
+            config_dict: Sweep configuration from View (Hz units).
+            duration_s: Monitor duration in seconds (0 = indefinite).
+            log_interval_ms_str: "auto" or numeric string for log interval.
+        """
+        # Resolve log interval: "auto" -> 0.0 (worker will use warmup mean)
+        if log_interval_ms_str == "auto":
+            effective_log_interval_ms = 0.0
+        else:
+            try:
+                effective_log_interval_ms = float(log_interval_ms_str)
+            except ValueError:
+                effective_log_interval_ms = 0.0
+
+        # Build monitor adapter config dict from model's monitor_config
+        monitor_config = self.model.monitor_config
+        adapter_config = monitor_config.to_backend_dict(
+            stim_lvl_dbm=config_dict.get("stim_lvl_dbm", -10),
+            avg_count=config_dict.get("avg_count", 1),
+        )
+
+        # Clear any previous monitor data
+        self.model.clear_monitor_data()
+        self.model.is_monitoring = True
+
+        # Create monitor worker
+        self._monitor_worker = VNAMonitorWorker(
+            config_dict=adapter_config,
+            calibration_file_path=self.model.calibration.file_path,
+            effective_log_interval_ms=effective_log_interval_ms,
+            duration_s=duration_s,
+            warmup_sweeps=monitor_config.warmup_sweeps,
+        )
+
+        # Connect monitor worker signals
+        self._monitor_worker.lifecycle_started.connect(
+            self._on_monitor_lifecycle_started
+        )
+        self._monitor_worker.warmup_completed.connect(
+            self._on_warmup_completed
+        )
+        self._monitor_worker.monitor_point.connect(
+            self._on_monitor_point
+        )
+        self._monitor_worker.monitor_saved.connect(
+            self._on_monitor_saved
+        )
+        self._monitor_worker.error_occurred.connect(
+            self._on_monitor_error
+        )
+
+        # Update UI state
+        self._monitoring = True
+        self._collecting = True  # Prevent concurrent operations
+        self.view.set_monitoring_state(True)
+        self.view.show_status_message(
+            "Starting monitor mode -- warming up...", timeout=0
+        )
+
+        # Start worker
+        self._monitor_worker.start()
 
     @Slot()
     def _on_load_calibration_requested(self):
@@ -1104,8 +1387,23 @@ class VNAPresenter(QObject):
         # Could add real-time validation here
         self._update_collect_button_state()
 
+    @Slot(str)
+    def _on_mode_changed(self, mode: str):
+        """
+        Handle mode selection change from View.
+
+        Updates the View's monitor controls enabled state based on the
+        selected mode. No model state changes here -- that happens when
+        the user clicks "Collect Data".
+
+        Args:
+            mode: "sanity_check" or "continuous_monitoring"
+        """
+        logger.info("Mode changed to: %s", mode)
+        self.view.set_monitor_controls_enabled(mode == "continuous_monitoring")
+
     # -----------------------------------------------------------------------
-    # Worker Thread Signals (Thread-Safe Slots)
+    # Worker Thread Signals (Thread-Safe Slots) -- Sweep Mode
     # -----------------------------------------------------------------------
 
     @Slot(dict)
@@ -1251,6 +1549,137 @@ class VNAPresenter(QObject):
         self._start_device_probe()
 
     # -----------------------------------------------------------------------
+    # Worker Thread Signals (Thread-Safe Slots) -- Monitor Mode
+    # -----------------------------------------------------------------------
+
+    @Slot(dict)
+    def _on_monitor_lifecycle_started(self, device_info: dict):
+        """
+        Called when monitor worker has started GUI and connected to device.
+
+        Args:
+            device_info: Dictionary with 'serial' and 'idn' keys
+        """
+        # Update model
+        self.model.device.connected = True
+        self.model.device.serial_number = device_info.get('serial', 'Unknown')
+        self.model.device.idn_string = device_info.get('idn', '')
+
+        # Update view
+        self.view.set_device_serial(self.model.device.serial_number)
+        self.view.show_status_message(
+            "Monitor: device connected -- running warmup sweeps...", timeout=0
+        )
+
+    @Slot(float)
+    def _on_warmup_completed(self, mean_sweep_time_ms: float):
+        """
+        Called when monitor warmup sweeps complete.
+
+        Auto-populates the log interval field if it was set to "auto".
+
+        Args:
+            mean_sweep_time_ms: Mean sweep duration in milliseconds
+        """
+        self.model.monitor_effective_log_interval_ms = mean_sweep_time_ms
+        self.view.set_log_interval_value(mean_sweep_time_ms)
+        self.view.show_status_message(
+            f"Monitor: warmup done (mean {mean_sweep_time_ms:.0f} ms) "
+            f"-- recording started",
+            timeout=0,
+        )
+        logger.info(
+            "Monitor warmup complete: mean_sweep_time=%.1f ms",
+            mean_sweep_time_ms,
+        )
+
+    @Slot(object)
+    def _on_monitor_point(self, record):
+        """
+        Called for each logged monitor data point.
+
+        Updates the model and status bar with the latest measurement.
+
+        Args:
+            record: MonitorRecord from the streaming callback
+        """
+        self.model.add_monitor_record(record)
+        count = len(self.model.monitor_records)
+        self.view.show_status_message(
+            f"Monitor: {count} points -- "
+            f"f={record.freq_hz / 1e6:.3f} MHz, "
+            f"S11={record.s11_db:.1f} dB",
+            timeout=0,
+        )
+
+    @Slot(str)
+    def _on_monitor_saved(self, csv_path: str):
+        """
+        Called when monitor recording stops and CSV is exported.
+
+        Resets monitoring state and re-probes the device.
+
+        Args:
+            csv_path: Absolute path to the exported CSV file, or empty string
+                if no records were captured.
+        """
+        # Reset state
+        self._monitoring = False
+        self._collecting = False
+        self.model.is_monitoring = False
+        self.model.device.connected = False
+
+        # Update view
+        self.view.set_monitoring_state(False)
+
+        if csv_path:
+            count = len(self.model.monitor_records)
+            self.view.show_status_message(
+                f"Monitor complete -- {count} points saved", timeout=0
+            )
+            self.view.show_success_dialog(
+                "Monitor Complete",
+                f"Recording stopped.\n\n"
+                f"Total data points: {count}\n\n"
+                f"Saved to:\n{csv_path}"
+            )
+        else:
+            self.view.show_status_message(
+                "Monitor stopped -- no data recorded", timeout=5000
+            )
+
+        # Re-probe device to restore connection and restart preview
+        self._start_device_probe()
+
+    @Slot(str)
+    def _on_monitor_error(self, error_message: str):
+        """
+        Called when monitor worker encounters an error.
+
+        Resets monitoring state and shows error dialog.
+
+        Args:
+            error_message: Full error traceback
+        """
+        # Reset state
+        self._monitoring = False
+        self._collecting = False
+        self.model.is_monitoring = False
+        self.model.device.connected = False
+
+        # Update view
+        self.view.set_monitoring_state(False)
+        self.view.show_status_message(
+            "Error occurred during monitoring", timeout=0
+        )
+
+        # Show error dialog
+        self.view.show_error_dialog("Monitor Error", error_message)
+
+        # Re-probe device
+        self._start_device_probe()
+
+    # -----------------------------------------------------------------------
     # Button State Machine
     # -----------------------------------------------------------------------
 
@@ -1262,12 +1691,21 @@ class VNAPresenter(QObject):
           - Device connected (detected via DeviceProbeWorker)
           - Calibration loaded
           - Config valid
-          - NOT currently collecting
+          - NOT currently collecting (sweep or monitor)
+
+        Exception: During monitoring, the button stays enabled with
+        "Stop Monitoring" text so the user can stop the recording.
+        The monitoring state is managed by set_monitoring_state() and
+        should not be overridden here.
 
         The button stays greyed out with a "Not Ready" label until the
         device probe succeeds. This prevents the user from clicking
         "Collect Data" before the device is fully initialized.
         """
+        # During active monitoring, the button is managed by set_monitoring_state()
+        if self._monitoring:
+            return
+
         ready = (
             self.model.device.connected and
             self.model.calibration.loaded and
@@ -1305,7 +1743,8 @@ class VNAPresenter(QObject):
           1. Stop VNAPreviewWorker (if previewing)
           2. Stop DeviceProbeWorker (if running)
           3. Stop VNASweepWorker and its adapter (if collecting)
-          4. Terminate GUI subprocess started by device probe (if any)
+          4. Stop VNAMonitorWorker and its adapter (if monitoring)
+          5. Terminate GUI subprocess started by device probe (if any)
 
         Each step uses graceful shutdown (quit+wait) with a timeout,
         falling back to forced termination if the timeout expires.
@@ -1325,7 +1764,10 @@ class VNAPresenter(QObject):
         # Step 3: Stop sweep worker thread (and its adapter subprocess)
         self._stop_sweep_worker()
 
-        # Step 4: Terminate probe GUI subprocess (started during detection)
+        # Step 4: Stop monitor worker thread (and its adapter subprocess)
+        self._stop_monitor_worker()
+
+        # Step 5: Terminate probe GUI subprocess (started during detection)
         self._stop_probe_gui_process()
 
         logger.info("Cleanup complete")
@@ -1420,3 +1862,78 @@ class VNAPresenter(QObject):
         # Reset state
         self._worker = None
         self._collecting = False
+
+    def _stop_monitor_worker(self):
+        """
+        Stop the VNAMonitorWorker QThread and its backend adapter.
+
+        The monitor worker may be in the middle of:
+          - Starting the GUI subprocess (blocking ~5-10s)
+          - Running warmup sweeps
+          - Recording monitor data (continuous streaming)
+          - Exporting CSV
+
+        Cleanup strategy:
+          1. Set the cancel event to signal the worker to stop recording.
+          2. If the worker has an adapter, the worker's finally block will
+             call stop_lifecycle(). We also force it here for safety.
+          3. Wait for the thread to finish.
+          4. Force-terminate if it does not stop within timeout.
+
+        Timeout: 10 seconds total (generous to allow CSV export to finish).
+
+        Also used as the "Stop Monitoring" action when the user clicks
+        the button during active monitoring.
+        """
+        if self._monitor_worker is None:
+            self._monitoring = False
+            return
+
+        if self._monitor_worker.isRunning():
+            logger.info("Stopping monitor worker (monitoring=%s)...", self._monitoring)
+
+            # Disconnect signals to prevent stale callbacks
+            try:
+                self._monitor_worker.lifecycle_started.disconnect(
+                    self._on_monitor_lifecycle_started
+                )
+                self._monitor_worker.warmup_completed.disconnect(
+                    self._on_warmup_completed
+                )
+                self._monitor_worker.monitor_point.disconnect(
+                    self._on_monitor_point
+                )
+                self._monitor_worker.monitor_saved.disconnect(
+                    self._on_monitor_saved
+                )
+                self._monitor_worker.error_occurred.disconnect(
+                    self._on_monitor_error
+                )
+            except (RuntimeError, TypeError):
+                pass  # Signals already disconnected
+
+            # Request graceful shutdown (sets cancel event -> stops recording -> exports CSV)
+            self._monitor_worker.stop()
+
+            # Wait for the worker thread to finish (includes CSV export time)
+            if not self._monitor_worker.wait(10000):  # 10 second timeout
+                logger.warning("Monitor worker did not stop in 10s -- terminating")
+                # Force-stop the adapter if it exists
+                if self._monitor_worker.adapter is not None:
+                    try:
+                        self._monitor_worker.adapter.stop_lifecycle()
+                    except Exception as exc:
+                        logger.warning("Monitor adapter force-stop error: %s", exc)
+                self._monitor_worker.terminate()
+                self._monitor_worker.wait(2000)
+
+            logger.info("Monitor worker stopped")
+
+        # Reset state
+        self._monitor_worker = None
+        self._monitoring = False
+        self._collecting = False
+        self.model.is_monitoring = False
+
+        # Update view
+        self.view.set_monitoring_state(False)
