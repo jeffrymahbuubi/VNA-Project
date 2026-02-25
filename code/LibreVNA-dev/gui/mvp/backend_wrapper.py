@@ -673,7 +673,7 @@ class GUIVNASweepAdapter:
         import datetime
         today = datetime.datetime.now().strftime("%Y%m%d")
         if base_output_dir is not None:
-            base_out_dir = os.path.join(base_output_dir, today)
+            base_out_dir = os.path.join(base_output_dir, "data", today)
         else:
             base_out_dir = os.path.join(_MODULE_DIR, "..", "data", today)
         os.makedirs(base_out_dir, exist_ok=True)
