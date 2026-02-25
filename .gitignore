@@ -12,7 +12,7 @@ __pycache__/
 settings.local.json
 .venv
 claude-scientific-skills
-
+.serena
 gh
 
 # Copilot CLI - exclude personal files but keep mcp-config.json
