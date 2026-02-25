@@ -70,6 +70,43 @@ claude mcp add context7 \
 
 ---
 
+## serena
+
+**Transport:** stdio via `uvx`
+**Note:** Serena needs the absolute project path passed via `--project`. On Windows, `$(pwd)` does not expand inside JSON configs, so either hardcode the path or use the shell variable at setup time.
+
+```bash
+# PowerShell
+claude mcp add serena --scope project -- uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project "$PWD"
+```
+
+```cmd
+:: cmd.exe
+claude mcp add serena --scope project -- uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project "%CD%"
+```
+
+> **⚠️ Scope note:** Without `--scope project`, `claude mcp add` defaults to **user scope** (`~/.claude.json`).
+> `--scope project` writes to `.claude/settings.json`. Both `.claude/settings.json` and `.mcp.json`
+> are valid project-level MCP configs read by Claude Code — `.mcp.json` is preferred for
+> shareability (already present in this repo).
+
+> **Manual alternative:** Instead of running the CLI command, add the entry directly to `.mcp.json`:
+> ```json
+> "serena": {
+>   "type": "stdio",
+>   "command": "uvx",
+>   "args": [
+>     "--from", "git+https://github.com/oraios/serena",
+>     "serena", "start-mcp-server",
+>     "--context", "claude-code",
+>     "--project", "D:\\path\\to\\your\\project"
+>   ],
+>   "env": {}
+> }
+> ```
+
+---
+
 ## Recommended: Harden transcript-api
 
 `transcript-api` is the only server with a hardcoded credential in `.mcp.json`. To align it with the context7 pattern:
