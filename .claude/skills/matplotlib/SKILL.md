@@ -4,6 +4,8 @@ description: Low-level plotting library for full customization. Use when you nee
 license: https://github.com/matplotlib/matplotlib/tree/main/LICENSE
 metadata:
     skill-author: K-Dense Inc.
+context: fork
+agent: vna-data-analyst, rf-data-analyst
 ---
 
 # Matplotlib
