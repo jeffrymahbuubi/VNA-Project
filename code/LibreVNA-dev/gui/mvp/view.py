@@ -308,6 +308,7 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         Signal()
     )  # Emitted when user clicks Device > Connect to > serial action
     config_changed = Signal()  # Emitted when user edits any config widget
+    mode_changed = Signal(str)  # Emits "sanity_check" or "continuous_monitoring"
     window_closing = (
         Signal()
     )  # Emitted when user closes the window (X button, Alt+F4, etc.)
@@ -338,6 +339,9 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         self.blink_timer = QTimer()
         self.blink_timer.timeout.connect(self._toggle_button_blink)
         self._blink_state = False
+
+        # Initialize mode configuration widgets
+        self._setup_mode_widgets()
 
         # Connect widget signals to user action signals
         self._connect_widget_signals()
@@ -403,6 +407,30 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         }
         self._apply_axis_settings()
 
+    def _setup_mode_widgets(self):
+        """
+        Initialize mode configuration widgets with default values.
+
+        Sets Continuous Monitoring as the default mode, populates the
+        monitor duration combo box, and enables the monitor-specific
+        controls (since continuous monitoring is the default).
+        """
+        # Set Continuous Monitoring as the default
+        self.continuousMonitoring.setChecked(True)
+
+        # Populate monitor duration combo box
+        self.monitorDurationcomboBox.clear()
+        for item in ("10", "30", "60", "Indefinitely"):
+            self.monitorDurationcomboBox.addItem(item)
+        # Default to "Indefinitely" (index 3)
+        self.monitorDurationcomboBox.setCurrentIndex(3)
+
+        # Set default placeholder text for log interval
+        self.logIntervallineEdit.setPlaceholderText("auto")
+
+        # Monitor controls enabled by default (continuous monitoring is selected)
+        self.set_monitor_controls_enabled(True)
+
     def _connect_widget_signals(self):
         """
         Connect UI widget signals to custom signals.
@@ -412,6 +440,8 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
                            stopFrequencyLineEdit, spanFrequencyLineEdit,
                            numberOfSweepLineEdit
           Acquisitions box: levelLineEdit, pointsLineEdit, ifbwFrequencyLineEdit
+          Mode box:        deviceSanityCheck, continuousMonitoring,
+                           monitorDurationcomboBox, logIntervallineEdit
           Actions:         actionLoad (.cal), actionLoad_yaml_config,
                            actionSerial_LibreVNA_USB (device connect)
           Button:          pushButton (Collect Data)
@@ -440,6 +470,130 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
 
         for widget in config_widgets:
             widget.textChanged.connect(lambda _text: self.config_changed.emit())
+
+        # Mode configuration widgets
+        self.deviceSanityCheck.toggled.connect(self._on_mode_toggled)
+        self.continuousMonitoring.toggled.connect(self._on_mode_toggled)
+        self.monitorDurationcomboBox.currentIndexChanged.connect(
+            lambda _idx: self.config_changed.emit()
+        )
+        self.logIntervallineEdit.textChanged.connect(
+            lambda _text: self.config_changed.emit()
+        )
+
+    # -----------------------------------------------------------------------
+    # Mode configuration helpers
+    # -----------------------------------------------------------------------
+
+    def _on_mode_toggled(self, checked: bool):
+        """
+        Handle radio button toggle for mode selection.
+
+        Only emits when a button becomes checked (ignores the unchecked
+        event from the other radio button) to avoid double-firing.
+
+        Args:
+            checked: True if the sender radio button is now checked
+        """
+        if not checked:
+            return  # Ignore the unchecked signal from the other button
+
+        mode = self.get_selected_mode()
+        self.set_monitor_controls_enabled(mode == "continuous_monitoring")
+        self.mode_changed.emit(mode)
+        self.config_changed.emit()
+
+    def set_monitor_controls_enabled(self, enabled: bool):
+        """
+        Enable or disable monitor-specific controls.
+
+        When Device Sanity Check is selected, the monitor duration combo box
+        and log interval line edit are grayed out. When Continuous Monitoring
+        is selected, they are re-enabled.
+
+        Args:
+            enabled: True to enable monitor controls, False to disable
+        """
+        self.monitorDurationcomboBox.setEnabled(enabled)
+        self.logIntervallineEdit.setEnabled(enabled)
+        self.monitorDurationsLabel.setEnabled(enabled)
+        self.logIntervalLabel.setEnabled(enabled)
+
+    def get_selected_mode(self) -> str:
+        """
+        Return the currently selected mode as a string.
+
+        Returns:
+            "sanity_check" if Device Sanity Check radio is checked,
+            "continuous_monitoring" if Continuous Monitoring radio is checked.
+        """
+        if self.deviceSanityCheck.isChecked():
+            return "sanity_check"
+        return "continuous_monitoring"
+
+    def set_log_interval_value(self, value_ms: float):
+        """
+        Set the log interval line edit to the given value in milliseconds.
+
+        Called by the Presenter after warmup completes to auto-populate
+        the effective log interval (mean sweep time in ms).
+
+        Args:
+            value_ms: Log interval in milliseconds (displayed as integer)
+        """
+        self.logIntervallineEdit.setText(str(int(round(value_ms))))
+
+    def get_monitor_duration_s(self) -> float:
+        """
+        Read the monitor duration from the combo box.
+
+        Returns:
+            Duration in seconds. 0.0 means "Indefinitely".
+        """
+        text = self.monitorDurationcomboBox.currentText()
+        if text == "Indefinitely":
+            return 0.0
+        try:
+            return float(text)
+        except ValueError:
+            return 0.0
+
+    def get_log_interval_ms(self) -> str:
+        """
+        Read the log interval from the line edit.
+
+        Returns:
+            "auto" if the field is empty, contains "auto", or is invalid.
+            Otherwise, the numeric string value in milliseconds.
+        """
+        text = self.logIntervallineEdit.text().strip()
+        if not text or text.lower() == "auto":
+            return "auto"
+        return text
+
+    def set_monitoring_state(self, monitoring: bool):
+        """
+        Toggle button appearance between ready and monitoring states.
+
+        Args:
+            monitoring: True = orange pulsing "Monitoring..." (button stays
+                        enabled so user can click to stop)
+                        False = green "Collect Data" (enabled, ready)
+        """
+        if monitoring:
+            self.pushButton.setText("Stop\nMonitoring")
+            self.pushButton.setStyleSheet(
+                "QPushButton { background-color: rgb(251, 146, 60); "
+                "border-style: solid; border-width: 2px; border-radius: 10px; "
+                "border-color: rgb(251, 146, 60); "
+                "color: white; }\n"
+                "QPushButton:hover { border-color: #ef4444; }"
+            )
+            self.pushButton.setEnabled(True)
+            self._blink_state = False
+            self.blink_timer.start(800)  # Pulse every 800ms
+        else:
+            self.set_collecting_state(False)
 
     # -----------------------------------------------------------------------
     # Display methods (called by Presenter)
@@ -660,38 +814,47 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         """Clear plot data (empty trace)."""
         self.plot_data_item.setData([], [])
 
-    def populate_sweep_config(self, config: dict):
+    def populate_sweep_config(self, config: dict, monitor_config: Optional[dict] = None):
         """
         Populate configuration widgets from config dictionary.
 
         Maps model fields to the actual widget names from the .ui file:
-          start_frequency  -> startFrequencyLineEdit
-          stop_frequency   -> stopFrequencyLineEdit
+          start_frequency  -> startFrequencyLineEdit  (displayed as MHz)
+          stop_frequency   -> stopFrequencyLineEdit   (displayed as MHz)
           num_points       -> pointsLineEdit
           stim_lvl_dbm     -> levelLineEdit
           num_sweeps       -> numberOfSweepLineEdit
           ifbw_values      -> ifbwFrequencyLineEdit (comma-separated)
 
-        Also computes and displays center and span frequencies.
+        Frequency values are stored in Hz internally but displayed as MHz
+        in the UI for readability. The read_sweep_config() method converts
+        MHz back to Hz when reading.
+
+        Also computes and displays center and span frequencies (in MHz).
 
         Args:
-            config: Dictionary with keys matching SweepConfig fields
+            config: Dictionary with keys matching SweepConfig fields (Hz)
+            monitor_config: Optional dict with monitor config fields.
+                If provided, populates logIntervallineEdit from
+                'log_interval_ms' (unless it is "auto").
         """
-        # Frequency settings
+        # Frequency settings -- display as MHz (model uses Hz)
         if "start_frequency" in config:
-            self.startFrequencyLineEdit.setText(str(config["start_frequency"]))
+            start_hz = config["start_frequency"]
+            self.startFrequencyLineEdit.setText(f"{start_hz / 1e6:.3f}")
 
         if "stop_frequency" in config:
-            self.stopFrequencyLineEdit.setText(str(config["stop_frequency"]))
+            stop_hz = config["stop_frequency"]
+            self.stopFrequencyLineEdit.setText(f"{stop_hz / 1e6:.3f}")
 
-        # Compute and populate center and span
+        # Compute and populate center and span (displayed as MHz)
         start = config.get("start_frequency", 0)
         stop = config.get("stop_frequency", 0)
         if start and stop:
-            center = (start + stop) // 2
+            center = (start + stop) / 2.0
             span = stop - start
-            self.centerFrequencyLineEdit.setText(str(center))
-            self.spanFrequencyLineEdit.setText(str(span))
+            self.centerFrequencyLineEdit.setText(f"{center / 1e6:.3f}")
+            self.spanFrequencyLineEdit.setText(f"{span / 1e6:.3f}")
 
         # Acquisition settings
         if "num_points" in config:
@@ -708,13 +871,26 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             ifbw_str = ", ".join(str(v) for v in config["ifbw_values"])
             self.ifbwFrequencyLineEdit.setText(ifbw_str)
 
+        # Monitor config fields (optional)
+        if monitor_config is not None:
+            log_ms = monitor_config.get("log_interval_ms", "auto")
+            if log_ms != "auto":
+                self.logIntervallineEdit.setText(str(log_ms))
+
     def read_sweep_config(self) -> dict:
         """
         Read configuration values from widgets.
 
+        Frequency values are displayed in MHz but stored internally in Hz.
+        This method converts the MHz display values back to Hz.
+
         Returns:
             Dictionary with config values (strings converted to appropriate types).
             Uses default of 1 for avg_count since there is no widget for it.
+            Also includes mode selection and monitor fields:
+              mode: "sanity_check" or "continuous_monitoring"
+              monitor_duration_s: float (0.0 = indefinite)
+              log_interval_ms: "auto" or numeric string
         """
         # Parse IFBW values (comma-separated string -> list of ints)
         ifbw_text = self.ifbwFrequencyLineEdit.text().strip()
@@ -725,13 +901,14 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             except ValueError:
                 ifbw_values = []
 
+        # Frequency values: displayed as MHz, convert to Hz (int)
         try:
-            start_freq = int(self.startFrequencyLineEdit.text() or 0)
+            start_freq = int(float(self.startFrequencyLineEdit.text() or 0) * 1e6)
         except ValueError:
             start_freq = 0
 
         try:
-            stop_freq = int(self.stopFrequencyLineEdit.text() or 0)
+            stop_freq = int(float(self.stopFrequencyLineEdit.text() or 0) * 1e6)
         except ValueError:
             stop_freq = 0
 
@@ -758,6 +935,10 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             "avg_count": 1,  # No widget in UI, use default
             "num_sweeps": num_sweeps,
             "ifbw_values": ifbw_values,
+            # Mode configuration
+            "mode": self.get_selected_mode(),
+            "monitor_duration_s": self.get_monitor_duration_s(),
+            "log_interval_ms": self.get_log_interval_ms(),
         }
 
     def set_device_serial(self, serial: str):
