@@ -4,6 +4,8 @@ description: Meta-skill for publication-ready figures. Use when creating journal
 license: MIT license
 metadata:
     skill-author: K-Dense Inc.
+context: fork
+agent: vna-data-analyst, rf-data-analyst
 ---
 
 # Scientific Visualization
