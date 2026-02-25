@@ -50,6 +50,20 @@ Despite the agent name, this project uses PySide6. Import `Signal`, `Slot` from 
 - Worker sends `:VNA:ACQ:IFBW {self.ifbw_hz}` SCPI in `run()` after freq config block
 - Data-collection path (VNASweepWorker) is NOT affected -- it uses its own IFBW via ContinuousModeSweep
 
+## Monitor Mode Feature (2026-02-25)
+- Two radio buttons in Mode Configuration box: "Device Sanity Check" / "Continuous Monitoring"
+- `view.mode_changed` Signal(str): emits "sanity_check" or "continuous_monitoring"
+- `_on_collect_data_requested()` dispatches to `_start_sanity_check_mode()` or `_start_monitor_mode()`
+- `VNAMonitorWorker(QThread)` in presenter.py: warmup -> record -> export CSV
+- Worker signals: lifecycle_started, warmup_completed(float), monitor_point(object), monitor_saved(str), error_occurred(str)
+- Uses `GUIVNAMonitorAdapter` from backend_wrapper.py for SCPI lifecycle
+- Button shows "Stop Monitoring" (orange) during monitor; user clicks to stop -> CSV export -> re-probe
+- `_stop_monitor_worker()` disconnects signals, calls `.stop()`, waits 10s, force-terminates if needed
+- View frequency display: MHz in UI, Hz in model/backend (populate: Hz/1e6, read: float*1e6)
+- `read_sweep_config()` returns `mode`, `monitor_duration_s`, `log_interval_ms` -- popped before SweepConfig
+- `MonitorConfig.from_dict(yaml_data)` parses `target.monitor` section of sweep_config.yaml
+- `_update_collect_button_state()` skips when `_monitoring=True` (button managed by set_monitoring_state)
+
 ## Key Constants (vna_backend.py)
 - SCPI_HOST="localhost", SCPI_PORT=19542, STREAMING_PORT=19001
 - GUI_START_TIMEOUT_S=30.0, CONTINUOUS_TIMEOUT_S=300
