@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Python is managed via `uv`. Always run scripts with `uv run python <script>`, never system Python directly.
 - The virtual environment lives at `code/.venv`. Dependencies are in `code/requirements.txt`.
+- **Always `cd code` before running `uv run python`**, or set `VIRTUAL_ENV=code/.venv` explicitly. Without this, `uv` walks up the directory tree and cannot find `code/.venv` (it never looks into subdirectories), falling back to a global cache environment.
 - LibreVNA-GUI binary: `code/LibreVNA-dev/tools/LibreVNA-GUI`. Scripts 3+ auto-start it in headless mode (`QT_QPA_PLATFORM=offscreen`) and poll TCP port 1234 for readiness.
 
 ## GitHub Integration
