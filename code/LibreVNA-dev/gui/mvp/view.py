@@ -595,6 +595,30 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         else:
             self.set_collecting_state(False)
 
+    def set_monitor_elapsed(self, elapsed_s: float, point_count: int = 0):
+        """
+        Display elapsed time and point count during Monitor collection.
+
+        Called every 0.25 seconds by the presenter while the monitor worker
+        is recording. Shows a combined status message with elapsed time and
+        the number of data points captured so far.
+
+        Args:
+            elapsed_s: Seconds elapsed since recording started.
+            point_count: Number of monitor data points captured so far.
+        """
+        mins = int(elapsed_s) // 60
+        secs = elapsed_s % 60
+        if mins > 0:
+            elapsed_str = f"{mins}m {secs:04.1f}s"
+        else:
+            elapsed_str = f"{secs:.1f}s"
+        self.statusbar.showMessage(
+            f"Monitor running -- elapsed: {elapsed_str} | "
+            f"{point_count} points captured",
+            0,
+        )
+
     # -----------------------------------------------------------------------
     # Display methods (called by Presenter)
     # -----------------------------------------------------------------------
