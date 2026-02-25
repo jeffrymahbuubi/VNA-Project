@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QSpinBox,
     QCheckBox,
     QGroupBox,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
 )
-from PySide6.QtCore import Signal, QTimer
+from PySide6.QtCore import Signal, QSettings, QTimer
 from PySide6.QtGui import QIcon, QCloseEvent
 import pyqtgraph as pg
 import numpy as np
@@ -304,6 +305,7 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
     collect_data_requested = Signal()
     load_calibration_requested = Signal()
     load_config_requested = Signal()
+    save_data_folder_requested = Signal()  # Emitted when user clicks Configuration > Save Data Folder
     connect_device_requested = (
         Signal()
     )  # Emitted when user clicks Device > Connect to > serial action
@@ -345,6 +347,9 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
 
         # Connect widget signals to user action signals
         self._connect_widget_signals()
+
+        # Persistent application settings (QSettings)
+        self._settings = QSettings("LibreVNA", "VNAPlotter")
 
         # Initialize button state
         self.set_collect_button_enabled(False)
@@ -452,6 +457,9 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         # Menu actions (these exist in the .ui file)
         self.actionLoad.triggered.connect(self.load_calibration_requested.emit)
         self.actionLoad_yaml_config.triggered.connect(self.load_config_requested.emit)
+        self.actionSave_data_folder.triggered.connect(
+            self.save_data_folder_requested.emit
+        )
         self.actionSerial_LibreVNA_USB.triggered.connect(
             self.connect_device_requested.emit
         )
@@ -570,6 +578,76 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         if not text or text.lower() == "auto":
             return "auto"
         return text
+
+    # -----------------------------------------------------------------------
+    # Save Data Folder helpers
+    # -----------------------------------------------------------------------
+
+    def get_persisted_save_folder(self) -> Optional[str]:
+        """
+        Read the persisted save data folder from QSettings.
+
+        Returns:
+            The stored folder path, or None if no custom folder is saved.
+        """
+        val = self._settings.value("save_data_folder", None)
+        if val is None or val == "":
+            return None
+        return str(val)
+
+    def persist_save_folder(self, folder: Optional[str]):
+        """
+        Write the save data folder to QSettings for persistence.
+
+        Args:
+            folder: Absolute path to the folder, or None to clear the
+                persisted value (reverts to default on next launch).
+        """
+        if folder is not None:
+            self._settings.setValue("save_data_folder", folder)
+        else:
+            self._settings.remove("save_data_folder")
+
+    def show_save_folder_dialog(self, current_folder: Optional[str] = None) -> Optional[str]:
+        """
+        Open a directory-picker dialog for the user to select a save folder.
+
+        Args:
+            current_folder: Starting directory shown in the dialog. If None,
+                the dialog opens at the platform default.
+
+        Returns:
+            The selected directory path, or None if the dialog was cancelled.
+        """
+        start_dir = current_folder if current_folder else ""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Save Data Folder",
+            start_dir,
+            QFileDialog.ShowDirsOnly,
+        )
+        if folder:
+            return folder
+        return None
+
+    def show_save_folder_label(self, folder: Optional[str]):
+        """
+        Update the Save Data Folder action tooltip and status bar to reflect
+        the active save directory.
+
+        Args:
+            folder: Active folder path, or None if using the default.
+        """
+        if folder is not None:
+            self.actionSave_data_folder.setToolTip(folder)
+            self.statusbar.showMessage(
+                f"Save folder: {folder}", 5000
+            )
+        else:
+            self.actionSave_data_folder.setToolTip("(default: gui/data/)")
+            self.statusbar.showMessage(
+                "Save folder: (default: gui/data/)", 5000
+            )
 
     def set_monitoring_state(self, monitoring: bool):
         """
