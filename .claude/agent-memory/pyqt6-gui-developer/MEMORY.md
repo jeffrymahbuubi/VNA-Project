@@ -64,6 +64,16 @@ Despite the agent name, this project uses PySide6. Import `Signal`, `Slot` from 
 - `MonitorConfig.from_dict(yaml_data)` parses `target.monitor` section of sweep_config.yaml
 - `_update_collect_button_state()` skips when `_monitoring=True` (button managed by set_monitoring_state)
 
+### Monitor Mode Live-Preview Fix (2026-02-26)
+- **Problem**: S11 plot froze during Monitor recording because VNAPreviewWorker was stopped and VNAMonitorWorker's streaming callback only extracted scalar data (min-freq), never updating the plot.
+- **Fix**: Added `sweep_preview = Signal(list, list)` and `elapsed_tick = Signal(float)` to `VNAMonitorWorker`.
+- In `backend_wrapper.py`, `GUIVNAMonitorAdapter.start_recording()` gained `preview_callback` param. Inside `_monitor_cb`, after converting S11 to dB, calls `preview_callback(freqs, s11_db)` on every complete sweep.
+- Preview callback emits `sweep_preview` signal -> presenter `_on_monitor_sweep_preview()` -> `view.update_plot()`.
+- Elapsed tick emits every 0.25s from poll loop -> presenter `_on_monitor_elapsed()` -> `view.set_monitor_elapsed(elapsed_s, count)`.
+- `view.set_monitor_elapsed()` shows "Monitor running -- elapsed: Xm Ys | N points captured" in status bar.
+- `_on_monitor_point()` simplified to only update model (status display moved to elapsed_tick handler).
+- Both new signals must be disconnected in `_stop_monitor_worker()` to prevent stale callbacks.
+
 ## Key Constants (vna_backend.py)
 - SCPI_HOST="localhost", SCPI_PORT=19542, STREAMING_PORT=19001
 - GUI_START_TIMEOUT_S=30.0, CONTINUOUS_TIMEOUT_S=300
