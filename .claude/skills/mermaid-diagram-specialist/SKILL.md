@@ -10,6 +10,8 @@ usage:
 input:
   Process description, data model, architecture requirements, workflow steps
 output: Mermaid diagrams (flowchart, sequence, ERD, C4, state, etc.) in markdown
+context: fork
+agent: vna-data-analyst, rf-data-analyst, librevna-python-expert, pyqt6-gui-developer
 ---
 
 # Mermaid Diagram Specialist
