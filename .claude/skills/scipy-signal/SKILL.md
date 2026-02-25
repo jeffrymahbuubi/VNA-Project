@@ -1,3 +1,13 @@
+---
+name: scipy-signal
+description: Time-series signal processing with scipy.signal. Use for peak detection, digital filtering (Butterworth, FIR/IIR), power spectral density (Welch method), and cross-correlation on numpy arrays. Ideal for VNA sweep data analysis, RF signal characterisation, and any task involving noisy or periodic time-series signals.
+license: https://github.com/scipy/scipy/blob/main/LICENSE.txt
+metadata:
+    skill-author: K-Dense Inc.
+context: fork
+agent: vna-data-analyst, rf-data-analyst
+---
+
 # scipy-signal-time-series-processing
 
 Teaches peak detection, filtering, and statistical analysis of time-series signals using scipy.signal
