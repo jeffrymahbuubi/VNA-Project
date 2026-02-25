@@ -16,9 +16,10 @@ from PySide6.QtGui import (QAction, QBrush, QColor, QConicalGradient,
     QIcon, QImage, QKeySequence, QLinearGradient,
     QPainter, QPalette, QPixmap, QRadialGradient,
     QTransform)
-from PySide6.QtWidgets import (QApplication, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMenu, QMenuBar,
-    QPushButton, QSizePolicy, QStatusBar, QVBoxLayout,
+from PySide6.QtWidgets import (QApplication, QComboBox, QGridLayout, QGroupBox,
+    QHBoxLayout, QLabel, QLayout, QLineEdit,
+    QMainWindow, QMenu, QMenuBar, QPushButton,
+    QRadioButton, QSizePolicy, QStatusBar, QVBoxLayout,
     QWidget)
 from . import resources_rc
 
@@ -26,7 +27,7 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(1282, 725)
+        MainWindow.resize(1280, 720)
         MainWindow.setMinimumSize(QSize(1280, 720))
         MainWindow.setMaximumSize(QSize(1920, 1080))
         font = QFont()
@@ -47,17 +48,21 @@ class Ui_MainWindow(object):
         self.centralwidget.setMinimumSize(QSize(0, 0))
         self.centralwidget.setMaximumSize(QSize(1920, 1080))
         self.verticalLayout = QVBoxLayout(self.centralwidget)
+        self.verticalLayout.setSpacing(0)
         self.verticalLayout.setObjectName(u"verticalLayout")
+        self.verticalLayout.setContentsMargins(-1, 0, -1, 0)
         self.mainWidget = QWidget(self.centralwidget)
         self.mainWidget.setObjectName(u"mainWidget")
         self.mainWidget.setMaximumSize(QSize(1920, 200))
         self.horizontalLayout_3 = QHBoxLayout(self.mainWidget)
+        self.horizontalLayout_3.setSpacing(0)
         self.horizontalLayout_3.setObjectName(u"horizontalLayout_3")
+        self.horizontalLayout_3.setContentsMargins(9, 0, -1, 0)
         self.logoWTMH = QLabel(self.mainWidget)
         self.logoWTMH.setObjectName(u"logoWTMH")
         self.logoWTMH.setMinimumSize(QSize(120, 120))
         self.logoWTMH.setMaximumSize(QSize(120, 120))
-        self.logoWTMH.setTextFormat(Qt.PlainText)
+        self.logoWTMH.setTextFormat(Qt.TextFormat.PlainText)
         self.logoWTMH.setPixmap(QPixmap(u":/ui/WTMH.png"))
         self.logoWTMH.setScaledContents(True)
 
@@ -65,9 +70,18 @@ class Ui_MainWindow(object):
 
         self.configurationWidget = QWidget(self.mainWidget)
         self.configurationWidget.setObjectName(u"configurationWidget")
-        self.verticalLayout_3 = QVBoxLayout(self.configurationWidget)
-        self.verticalLayout_3.setObjectName(u"verticalLayout_3")
-        self.sweepBox = QGroupBox(self.configurationWidget)
+        self.configurationWidget.setEnabled(True)
+        self.configurationWidget.setMaximumSize(QSize(16777215, 190))
+        self.horizontalLayout_4 = QHBoxLayout(self.configurationWidget)
+        self.horizontalLayout_4.setObjectName(u"horizontalLayout_4")
+        self.widget = QWidget(self.configurationWidget)
+        self.widget.setObjectName(u"widget")
+        self.widget.setMaximumSize(QSize(700, 16777215))
+        self.verticalLayout_4 = QVBoxLayout(self.widget)
+        self.verticalLayout_4.setSpacing(0)
+        self.verticalLayout_4.setObjectName(u"verticalLayout_4")
+        self.verticalLayout_4.setContentsMargins(0, 0, 0, 0)
+        self.sweepBox = QGroupBox(self.widget)
         self.sweepBox.setObjectName(u"sweepBox")
         self.sweepBox.setMinimumSize(QSize(0, 0))
         font2 = QFont()
@@ -143,9 +157,9 @@ class Ui_MainWindow(object):
         self.horizontalLayout.addWidget(self.numberOfSweepLineEdit)
 
 
-        self.verticalLayout_3.addWidget(self.sweepBox)
+        self.verticalLayout_4.addWidget(self.sweepBox)
 
-        self.acqusitionsBox = QGroupBox(self.configurationWidget)
+        self.acqusitionsBox = QGroupBox(self.widget)
         self.acqusitionsBox.setObjectName(u"acqusitionsBox")
         self.acqusitionsBox.setMinimumSize(QSize(0, 0))
         self.acqusitionsBox.setFont(font2)
@@ -188,19 +202,111 @@ class Ui_MainWindow(object):
         self.horizontalLayout_2.addWidget(self.ifbwFrequencyLineEdit)
 
 
-        self.verticalLayout_3.addWidget(self.acqusitionsBox)
+        self.verticalLayout_4.addWidget(self.acqusitionsBox)
+
+
+        self.horizontalLayout_4.addWidget(self.widget)
+
+        self.modeConfigurationBox = QGroupBox(self.configurationWidget)
+        self.modeConfigurationBox.setObjectName(u"modeConfigurationBox")
+        self.modeConfigurationBox.setMinimumSize(QSize(0, 150))
+        self.modeConfigurationBox.setMaximumSize(QSize(16777215, 16777215))
+        self.modeConfigurationBox.setFont(font2)
+        self.verticalLayout_3 = QVBoxLayout(self.modeConfigurationBox)
+        self.verticalLayout_3.setSpacing(0)
+        self.verticalLayout_3.setObjectName(u"verticalLayout_3")
+        self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
+        self.modeSelectionWidget = QWidget(self.modeConfigurationBox)
+        self.modeSelectionWidget.setObjectName(u"modeSelectionWidget")
+        self.modeSelectionWidget.setMinimumSize(QSize(0, 50))
+        self.modeSelectionWidget.setMaximumSize(QSize(1000, 1000))
+        self.modeSelectionWidget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.modeSelectionWidget.setAutoFillBackground(False)
+        self.horizontalLayout_5 = QHBoxLayout(self.modeSelectionWidget)
+        self.horizontalLayout_5.setSpacing(0)
+        self.horizontalLayout_5.setObjectName(u"horizontalLayout_5")
+        self.horizontalLayout_5.setSizeConstraint(QLayout.SizeConstraint.SetDefaultConstraint)
+        self.horizontalLayout_5.setContentsMargins(9, 0, 9, 0)
+        self.modeSelectionLabel = QLabel(self.modeSelectionWidget)
+        self.modeSelectionLabel.setObjectName(u"modeSelectionLabel")
+        self.modeSelectionLabel.setFont(font3)
+
+        self.horizontalLayout_5.addWidget(self.modeSelectionLabel)
+
+        self.radioButtonWidget = QWidget(self.modeSelectionWidget)
+        self.radioButtonWidget.setObjectName(u"radioButtonWidget")
+        self.verticalLayout_5 = QVBoxLayout(self.radioButtonWidget)
+        self.verticalLayout_5.setSpacing(0)
+        self.verticalLayout_5.setObjectName(u"verticalLayout_5")
+        self.verticalLayout_5.setContentsMargins(-1, 0, 0, 0)
+        self.deviceSanityCheck = QRadioButton(self.radioButtonWidget)
+        self.deviceSanityCheck.setObjectName(u"deviceSanityCheck")
+        font4 = QFont()
+        font4.setFamilies([u"Times New Roman"])
+        font4.setPointSize(10)
+        font4.setBold(False)
+        self.deviceSanityCheck.setFont(font4)
+
+        self.verticalLayout_5.addWidget(self.deviceSanityCheck)
+
+        self.continuousMonitoring = QRadioButton(self.radioButtonWidget)
+        self.continuousMonitoring.setObjectName(u"continuousMonitoring")
+        self.continuousMonitoring.setFont(font4)
+
+        self.verticalLayout_5.addWidget(self.continuousMonitoring)
+
+
+        self.horizontalLayout_5.addWidget(self.radioButtonWidget)
+
+
+        self.verticalLayout_3.addWidget(self.modeSelectionWidget)
+
+        self.userInputDurationTimeWidget = QWidget(self.modeConfigurationBox)
+        self.userInputDurationTimeWidget.setObjectName(u"userInputDurationTimeWidget")
+        self.gridLayout = QGridLayout(self.userInputDurationTimeWidget)
+        self.gridLayout.setObjectName(u"gridLayout")
+        self.gridLayout.setHorizontalSpacing(10)
+        self.gridLayout.setVerticalSpacing(2)
+        self.gridLayout.setContentsMargins(12, 0, 9, 7)
+        self.monitorDurationsLabel = QLabel(self.userInputDurationTimeWidget)
+        self.monitorDurationsLabel.setObjectName(u"monitorDurationsLabel")
+        self.monitorDurationsLabel.setFont(font3)
+
+        self.gridLayout.addWidget(self.monitorDurationsLabel, 0, 0, 1, 1)
+
+        self.monitorDurationcomboBox = QComboBox(self.userInputDurationTimeWidget)
+        self.monitorDurationcomboBox.setObjectName(u"monitorDurationcomboBox")
+
+        self.gridLayout.addWidget(self.monitorDurationcomboBox, 0, 1, 1, 1)
+
+        self.logIntervalLabel = QLabel(self.userInputDurationTimeWidget)
+        self.logIntervalLabel.setObjectName(u"logIntervalLabel")
+        self.logIntervalLabel.setFont(font3)
+
+        self.gridLayout.addWidget(self.logIntervalLabel, 1, 0, 1, 1)
+
+        self.logIntervallineEdit = QLineEdit(self.userInputDurationTimeWidget)
+        self.logIntervallineEdit.setObjectName(u"logIntervallineEdit")
+
+        self.gridLayout.addWidget(self.logIntervallineEdit, 1, 1, 1, 1)
+
+
+        self.verticalLayout_3.addWidget(self.userInputDurationTimeWidget)
+
+
+        self.horizontalLayout_4.addWidget(self.modeConfigurationBox)
 
 
         self.horizontalLayout_3.addWidget(self.configurationWidget)
 
         self.pushButton = QPushButton(self.mainWidget)
         self.pushButton.setObjectName(u"pushButton")
-        self.pushButton.setMinimumSize(QSize(200, 158))
-        font4 = QFont()
-        font4.setFamilies([u"Segoe UI"])
-        font4.setPointSize(24)
-        font4.setBold(True)
-        self.pushButton.setFont(font4)
+        self.pushButton.setMinimumSize(QSize(200, 145))
+        font5 = QFont()
+        font5.setFamilies([u"Segoe UI"])
+        font5.setPointSize(24)
+        font5.setBold(True)
+        self.pushButton.setFont(font5)
         self.pushButton.setStyleSheet(u"QPushButton{\n"
 "	    background-color: rgb(74, 222, 128);\n"
 "        border-style: solid;\n"
@@ -223,13 +329,14 @@ class Ui_MainWindow(object):
         self.tracesBox.setFont(font2)
         self.verticalLayout_2 = QVBoxLayout(self.tracesBox)
         self.verticalLayout_2.setObjectName(u"verticalLayout_2")
+        self.verticalLayout_2.setContentsMargins(-1, 0, -1, -1)
         self.s11TracePlot = QLabel(self.tracesBox)
         self.s11TracePlot.setObjectName(u"s11TracePlot")
-        font5 = QFont()
-        font5.setFamilies([u"Times New Roman"])
-        font5.setPointSize(1)
-        font5.setBold(True)
-        self.s11TracePlot.setFont(font5)
+        font6 = QFont()
+        font6.setFamilies([u"Times New Roman"])
+        font6.setPointSize(1)
+        font6.setBold(True)
+        self.s11TracePlot.setFont(font6)
         self.s11TracePlot.setPixmap(QPixmap(u":/ui/placeholder-s11.png"))
         self.s11TracePlot.setScaledContents(True)
 
@@ -241,7 +348,7 @@ class Ui_MainWindow(object):
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
         self.menubar.setObjectName(u"menubar")
-        self.menubar.setGeometry(QRect(0, 0, 1282, 24))
+        self.menubar.setGeometry(QRect(0, 0, 1280, 33))
         self.menuDevice = QMenu(self.menubar)
         self.menuDevice.setObjectName(u"menuDevice")
         self.menuDevice.setFont(font)
@@ -278,16 +385,22 @@ class Ui_MainWindow(object):
         self.actionLoad_yaml_config.setText(QCoreApplication.translate("MainWindow", u"Load .yaml config", None))
         self.actionSerial_LibreVNA_USB.setText(QCoreApplication.translate("MainWindow", u"Serial (LibreVNA/USB)", None))
         self.logoWTMH.setText("")
-        self.sweepBox.setTitle(QCoreApplication.translate("MainWindow", u"Sweep", None))
+        self.sweepBox.setTitle(QCoreApplication.translate("MainWindow", u"Sweep Configuration", None))
         self.startFrequencyLabel.setText(QCoreApplication.translate("MainWindow", u"Start", None))
         self.centerFrequencyLabel.setText(QCoreApplication.translate("MainWindow", u"Center", None))
         self.stopFrequencyLabel.setText(QCoreApplication.translate("MainWindow", u"Stop", None))
         self.spanFrequencyLabel.setText(QCoreApplication.translate("MainWindow", u"Span", None))
         self.numberOfSweepLabel.setText(QCoreApplication.translate("MainWindow", u"No. of Sweep", None))
-        self.acqusitionsBox.setTitle(QCoreApplication.translate("MainWindow", u"Acqusitions", None))
+        self.acqusitionsBox.setTitle(QCoreApplication.translate("MainWindow", u"Acqusition Configuration", None))
         self.levelLabel.setText(QCoreApplication.translate("MainWindow", u"Level", None))
         self.pointsLabel.setText(QCoreApplication.translate("MainWindow", u"Points", None))
         self.ifbwFrequencyLabel.setText(QCoreApplication.translate("MainWindow", u"IF BW:", None))
+        self.modeConfigurationBox.setTitle(QCoreApplication.translate("MainWindow", u"Mode Configuration", None))
+        self.modeSelectionLabel.setText(QCoreApplication.translate("MainWindow", u"Mode Selection", None))
+        self.deviceSanityCheck.setText(QCoreApplication.translate("MainWindow", u"Device Sanity Check", None))
+        self.continuousMonitoring.setText(QCoreApplication.translate("MainWindow", u"Continuous Monitoring", None))
+        self.monitorDurationsLabel.setText(QCoreApplication.translate("MainWindow", u"Monitor Durations (s)", None))
+        self.logIntervalLabel.setText(QCoreApplication.translate("MainWindow", u"Log Interval (ms)", None))
         self.pushButton.setText(QCoreApplication.translate("MainWindow", u"Collect Data", None))
         self.tracesBox.setTitle(QCoreApplication.translate("MainWindow", u"Traces", None))
         self.s11TracePlot.setText("")
