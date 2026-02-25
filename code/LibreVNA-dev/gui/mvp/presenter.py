@@ -442,17 +442,25 @@ class VNASweepWorker(QThread):
     all_completed = Signal(str)  # output_directory_path (CSV bundle)
     error_occurred = Signal(str)  # error_message
 
-    def __init__(self, config_dict: dict, calibration_file_path: str):
+    def __init__(
+        self,
+        config_dict: dict,
+        calibration_file_path: str,
+        base_output_dir: Optional[str] = None,
+    ):
         """
         Initialize worker with sweep configuration.
 
         Args:
             config_dict: SweepConfig.to_dict() output
             calibration_file_path: Absolute path to .cal file
+            base_output_dir: Optional user-configured base save directory.
+                If None, the backend uses its default (gui/data/YYYYMMDD/).
         """
         super().__init__()
         self.config = config_dict
         self.cal_file_path = calibration_file_path
+        self.base_output_dir = base_output_dir
         self.adapter: Optional[GUIVNASweepAdapter] = None
 
     def run(self):
@@ -502,7 +510,9 @@ class VNASweepWorker(QThread):
             # Step 3: Save results to CSV bundle
             timestamp = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
             custom_dirname = f"gui_sweep_collection_{timestamp}"
-            output_dir = self.adapter.save_results(custom_dirname)
+            output_dir = self.adapter.save_results(
+                custom_dirname, base_output_dir=self.base_output_dir
+            )
 
             self.all_completed.emit(output_dir)
 
@@ -547,6 +557,7 @@ class VNAMonitorWorker(QThread):
         effective_log_interval_ms: float,
         duration_s: float,
         warmup_sweeps: int = 5,
+        base_output_dir: Optional[str] = None,
         parent=None,
     ):
         """
@@ -564,6 +575,8 @@ class VNAMonitorWorker(QThread):
             duration_s: Recording duration in seconds. 0 = indefinite
                 (run until stop() is called).
             warmup_sweeps: Number of warmup sweeps for timing estimation.
+            base_output_dir: Optional user-configured base save directory.
+                If None, the backend uses its default (gui/data/YYYYMMDD/).
             parent: Optional QObject parent.
         """
         super().__init__(parent)
@@ -572,6 +585,7 @@ class VNAMonitorWorker(QThread):
         self.effective_log_interval_ms = effective_log_interval_ms
         self.duration_s = duration_s
         self.warmup_sweeps = warmup_sweeps
+        self.base_output_dir = base_output_dir
         self._cancel_event = threading.Event()
         self.adapter: Optional[GUIVNAMonitorAdapter] = None
 
@@ -654,7 +668,16 @@ class VNAMonitorWorker(QThread):
                     break
 
             # Step 6: Stop recording and export CSV
-            csv_path = self.adapter.stop_recording()
+            # Build the dated output directory if the user configured a
+            # custom base folder. If base_output_dir is None, the backend
+            # falls back to its default (gui/data/YYYYMMDD/).
+            monitor_out_dir = None
+            if self.base_output_dir is not None:
+                today = __import__('datetime').datetime.now().strftime("%Y%m%d")
+                monitor_out_dir = __import__('os').path.join(
+                    self.base_output_dir, today
+                )
+            csv_path = self.adapter.stop_recording(output_dir=monitor_out_dir)
             if csv_path:
                 self.monitor_saved.emit(csv_path)
             else:
@@ -734,6 +757,7 @@ class VNAPresenter(QObject):
         self.view.collect_data_requested.connect(self._on_collect_data_requested)
         self.view.load_calibration_requested.connect(self._on_load_calibration_requested)
         self.view.load_config_requested.connect(self._on_load_config_requested)
+        self.view.save_data_folder_requested.connect(self._on_save_data_folder_requested)
         self.view.connect_device_requested.connect(self._on_connect_device_requested)
         self.view.config_changed.connect(self._on_config_changed)
         self.view.mode_changed.connect(self._on_mode_changed)
@@ -842,6 +866,13 @@ class VNAPresenter(QObject):
         else:
             # Use model defaults
             self.view.populate_sweep_config(self.model.config.to_dict())
+
+        # Restore persisted save data folder (from QSettings)
+        saved_folder = self.view.get_persisted_save_folder()
+        if saved_folder:
+            self.model.save_data_folder = saved_folder
+            self.view.show_save_folder_label(saved_folder)
+            logger.info("Restored save data folder: %s", saved_folder)
 
         # Update button state after auto-detection
         # Device is NOT connected yet (probe worker will detect), so button stays disabled
@@ -1314,7 +1345,8 @@ class VNAPresenter(QObject):
         # Create worker thread
         self._worker = VNASweepWorker(
             config.to_dict(),
-            self.model.calibration.file_path
+            self.model.calibration.file_path,
+            base_output_dir=self.model.save_data_folder,
         )
 
         # Connect worker signals
@@ -1376,6 +1408,7 @@ class VNAPresenter(QObject):
             effective_log_interval_ms=effective_log_interval_ms,
             duration_s=duration_s,
             warmup_sweeps=monitor_config.warmup_sweeps,
+            base_output_dir=self.model.save_data_folder,
         )
 
         # Connect monitor worker signals
@@ -1513,6 +1546,22 @@ class VNAPresenter(QObject):
                     "Config Load Error",
                     f"Failed to load configuration:\n{str(e)}"
                 )
+
+    @Slot()
+    def _on_save_data_folder_requested(self):
+        """
+        Handle 'Save Data Folder' menu action.
+
+        Opens a directory-picker dialog. If the user selects a folder, stores
+        it in the model and persists it via QSettings so it survives restarts.
+        """
+        current = self.model.save_data_folder
+        folder = self.view.show_save_folder_dialog(current)
+        if folder is not None:
+            self.model.save_data_folder = folder
+            self.view.persist_save_folder(folder)
+            self.view.show_save_folder_label(folder)
+            logger.info("Save data folder set to: %s", folder)
 
     @Slot()
     def _on_config_changed(self):
