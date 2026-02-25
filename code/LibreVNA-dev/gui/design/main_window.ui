@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1282</width>
-    <height>725</height>
+    <width>1280</width>
+    <height>720</height>
    </rect>
   </property>
   <property name="minimumSize">
@@ -45,6 +45,15 @@
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout">
+    <property name="spacing">
+     <number>0</number>
+    </property>
+    <property name="topMargin">
+     <number>0</number>
+    </property>
+    <property name="bottomMargin">
+     <number>0</number>
+    </property>
     <item>
      <widget class="QWidget" name="mainWidget" native="true">
       <property name="maximumSize">
@@ -54,6 +63,18 @@
        </size>
       </property>
       <layout class="QHBoxLayout" name="horizontalLayout_3">
+       <property name="spacing">
+        <number>0</number>
+       </property>
+       <property name="leftMargin">
+        <number>9</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
        <item>
         <widget class="QLabel" name="logoWTMH">
          <property name="minimumSize">
@@ -72,7 +93,7 @@
           <string/>
          </property>
          <property name="textFormat">
-          <enum>Qt::PlainText</enum>
+          <enum>Qt::TextFormat::PlainText</enum>
          </property>
          <property name="pixmap">
           <pixmap resource="../resources/resources.qrc">:/ui/WTMH.png</pixmap>
@@ -84,142 +105,269 @@
        </item>
        <item>
         <widget class="QWidget" name="configurationWidget" native="true">
-         <layout class="QVBoxLayout" name="verticalLayout_3">
+         <property name="enabled">
+          <bool>true</bool>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>190</height>
+          </size>
+         </property>
+         <layout class="QHBoxLayout" name="horizontalLayout_4">
           <item>
-           <widget class="QGroupBox" name="sweepBox">
-            <property name="minimumSize">
+           <widget class="QWidget" name="widget" native="true">
+            <property name="maximumSize">
              <size>
-              <width>0</width>
-              <height>0</height>
+              <width>700</width>
+              <height>16777215</height>
              </size>
             </property>
-            <property name="font">
-             <font>
-              <family>Times New Roman</family>
-              <pointsize>12</pointsize>
-              <bold>true</bold>
-             </font>
-            </property>
-            <property name="autoFillBackground">
-             <bool>false</bool>
-            </property>
-            <property name="title">
-             <string>Sweep</string>
-            </property>
-            <property name="flat">
-             <bool>false</bool>
-            </property>
-            <layout class="QHBoxLayout" name="horizontalLayout">
+            <layout class="QVBoxLayout" name="verticalLayout_4">
+             <property name="spacing">
+              <number>0</number>
+             </property>
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
              <item>
-              <widget class="QLabel" name="startFrequencyLabel">
+              <widget class="QGroupBox" name="sweepBox">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>0</height>
+                </size>
+               </property>
                <property name="font">
                 <font>
                  <family>Times New Roman</family>
                  <pointsize>12</pointsize>
-                 <bold>false</bold>
+                 <bold>true</bold>
                 </font>
                </property>
-               <property name="text">
-                <string>Start</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="startFrequencyLineEdit"/>
-             </item>
-             <item>
-              <widget class="QLabel" name="centerFrequencyLabel">
-               <property name="font">
-                <font>
-                 <family>Times New Roman</family>
-                 <pointsize>12</pointsize>
-                 <bold>false</bold>
-                </font>
-               </property>
-               <property name="text">
-                <string>Center</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="centerFrequencyLineEdit">
                <property name="autoFillBackground">
-                <bool>true</bool>
+                <bool>false</bool>
                </property>
+               <property name="title">
+                <string>Sweep Configuration</string>
+               </property>
+               <property name="flat">
+                <bool>false</bool>
+               </property>
+               <layout class="QHBoxLayout" name="horizontalLayout">
+                <item>
+                 <widget class="QLabel" name="startFrequencyLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Start</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="startFrequencyLineEdit"/>
+                </item>
+                <item>
+                 <widget class="QLabel" name="centerFrequencyLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Center</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="centerFrequencyLineEdit">
+                  <property name="autoFillBackground">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLabel" name="stopFrequencyLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Stop</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="stopFrequencyLineEdit">
+                  <property name="autoFillBackground">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLabel" name="spanFrequencyLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Span</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="spanFrequencyLineEdit">
+                  <property name="autoFillBackground">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLabel" name="numberOfSweepLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>No. of Sweep</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="numberOfSweepLineEdit">
+                  <property name="autoFillBackground">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
               </widget>
              </item>
              <item>
-              <widget class="QLabel" name="stopFrequencyLabel">
+              <widget class="QGroupBox" name="acqusitionsBox">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>0</height>
+                </size>
+               </property>
                <property name="font">
                 <font>
                  <family>Times New Roman</family>
                  <pointsize>12</pointsize>
-                 <bold>false</bold>
+                 <bold>true</bold>
                 </font>
                </property>
-               <property name="text">
-                <string>Stop</string>
+               <property name="title">
+                <string>Acqusition Configuration</string>
                </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="stopFrequencyLineEdit">
-               <property name="autoFillBackground">
-                <bool>true</bool>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="spanFrequencyLabel">
-               <property name="font">
-                <font>
-                 <family>Times New Roman</family>
-                 <pointsize>12</pointsize>
-                 <bold>false</bold>
-                </font>
-               </property>
-               <property name="text">
-                <string>Span</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="spanFrequencyLineEdit">
-               <property name="autoFillBackground">
-                <bool>true</bool>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="numberOfSweepLabel">
-               <property name="font">
-                <font>
-                 <family>Times New Roman</family>
-                 <pointsize>12</pointsize>
-                 <bold>false</bold>
-                </font>
-               </property>
-               <property name="text">
-                <string>No. of Sweep</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="numberOfSweepLineEdit">
-               <property name="autoFillBackground">
-                <bool>true</bool>
-               </property>
+               <layout class="QHBoxLayout" name="horizontalLayout_2">
+                <item>
+                 <widget class="QLabel" name="levelLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Level</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="levelLineEdit">
+                  <property name="autoFillBackground">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLabel" name="pointsLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Points</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="pointsLineEdit">
+                  <property name="autoFillBackground">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLabel" name="ifbwFrequencyLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>IF BW:</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="ifbwFrequencyLineEdit">
+                  <property name="autoFillBackground">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
               </widget>
              </item>
             </layout>
            </widget>
           </item>
           <item>
-           <widget class="QGroupBox" name="acqusitionsBox">
+           <widget class="QGroupBox" name="modeConfigurationBox">
             <property name="minimumSize">
              <size>
               <width>0</width>
-              <height>0</height>
+              <height>150</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>16777215</width>
+              <height>16777215</height>
              </size>
             </property>
             <property name="font">
@@ -230,70 +378,182 @@
              </font>
             </property>
             <property name="title">
-             <string>Acqusitions</string>
+             <string>Mode Configuration</string>
             </property>
-            <layout class="QHBoxLayout" name="horizontalLayout_2">
+            <layout class="QVBoxLayout" name="verticalLayout_3">
+             <property name="spacing">
+              <number>0</number>
+             </property>
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
              <item>
-              <widget class="QLabel" name="levelLabel">
-               <property name="font">
-                <font>
-                 <family>Times New Roman</family>
-                 <pointsize>12</pointsize>
-                 <bold>false</bold>
-                </font>
+              <widget class="QWidget" name="modeSelectionWidget" native="true">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>50</height>
+                </size>
                </property>
-               <property name="text">
-                <string>Level</string>
+               <property name="maximumSize">
+                <size>
+                 <width>1000</width>
+                 <height>1000</height>
+                </size>
                </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="levelLineEdit">
+               <property name="layoutDirection">
+                <enum>Qt::LayoutDirection::LeftToRight</enum>
+               </property>
                <property name="autoFillBackground">
-                <bool>true</bool>
+                <bool>false</bool>
                </property>
+               <layout class="QHBoxLayout" name="horizontalLayout_5">
+                <property name="spacing">
+                 <number>0</number>
+                </property>
+                <property name="sizeConstraint">
+                 <enum>QLayout::SizeConstraint::SetDefaultConstraint</enum>
+                </property>
+                <property name="leftMargin">
+                 <number>9</number>
+                </property>
+                <property name="topMargin">
+                 <number>0</number>
+                </property>
+                <property name="rightMargin">
+                 <number>9</number>
+                </property>
+                <property name="bottomMargin">
+                 <number>0</number>
+                </property>
+                <item>
+                 <widget class="QLabel" name="modeSelectionLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Mode Selection</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QWidget" name="radioButtonWidget" native="true">
+                  <layout class="QVBoxLayout" name="verticalLayout_5">
+                   <property name="spacing">
+                    <number>0</number>
+                   </property>
+                   <property name="topMargin">
+                    <number>0</number>
+                   </property>
+                   <property name="rightMargin">
+                    <number>0</number>
+                   </property>
+                   <property name="bottomMargin">
+                    <number>0</number>
+                   </property>
+                   <item>
+                    <widget class="QRadioButton" name="deviceSanityCheck">
+                     <property name="font">
+                      <font>
+                       <family>Times New Roman</family>
+                       <pointsize>10</pointsize>
+                       <bold>false</bold>
+                      </font>
+                     </property>
+                     <property name="text">
+                      <string>Device Sanity Check</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item>
+                    <widget class="QRadioButton" name="continuousMonitoring">
+                     <property name="font">
+                      <font>
+                       <family>Times New Roman</family>
+                       <pointsize>10</pointsize>
+                       <bold>false</bold>
+                      </font>
+                     </property>
+                     <property name="text">
+                      <string>Continuous Monitoring</string>
+                     </property>
+                    </widget>
+                   </item>
+                  </layout>
+                 </widget>
+                </item>
+               </layout>
               </widget>
              </item>
              <item>
-              <widget class="QLabel" name="pointsLabel">
-               <property name="font">
-                <font>
-                 <family>Times New Roman</family>
-                 <pointsize>12</pointsize>
-                 <bold>false</bold>
-                </font>
-               </property>
-               <property name="text">
-                <string>Points</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="pointsLineEdit">
-               <property name="autoFillBackground">
-                <bool>true</bool>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="ifbwFrequencyLabel">
-               <property name="font">
-                <font>
-                 <family>Times New Roman</family>
-                 <pointsize>12</pointsize>
-                 <bold>false</bold>
-                </font>
-               </property>
-               <property name="text">
-                <string>IF BW:</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="ifbwFrequencyLineEdit">
-               <property name="autoFillBackground">
-                <bool>true</bool>
-               </property>
+              <widget class="QWidget" name="userInputDurationTimeWidget" native="true">
+               <layout class="QGridLayout" name="gridLayout">
+                <property name="leftMargin">
+                 <number>12</number>
+                </property>
+                <property name="topMargin">
+                 <number>0</number>
+                </property>
+                <property name="rightMargin">
+                 <number>9</number>
+                </property>
+                <property name="bottomMargin">
+                 <number>7</number>
+                </property>
+                <property name="horizontalSpacing">
+                 <number>10</number>
+                </property>
+                <property name="verticalSpacing">
+                 <number>2</number>
+                </property>
+                <item row="0" column="0">
+                 <widget class="QLabel" name="monitorDurationsLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Monitor Durations (s)</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QComboBox" name="monitorDurationcomboBox"/>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="logIntervalLabel">
+                  <property name="font">
+                   <font>
+                    <family>Times New Roman</family>
+                    <pointsize>12</pointsize>
+                    <bold>false</bold>
+                   </font>
+                  </property>
+                  <property name="text">
+                   <string>Log Interval (ms)</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QLineEdit" name="logIntervallineEdit"/>
+                </item>
+               </layout>
               </widget>
              </item>
             </layout>
@@ -307,7 +567,7 @@
          <property name="minimumSize">
           <size>
            <width>200</width>
-           <height>158</height>
+           <height>145</height>
           </size>
          </property>
          <property name="font">
@@ -351,6 +611,9 @@ QPushButton:hover {
        <string>Traces</string>
       </property>
       <layout class="QVBoxLayout" name="verticalLayout_2">
+       <property name="topMargin">
+        <number>0</number>
+       </property>
        <item>
         <widget class="QLabel" name="s11TracePlot">
          <property name="font">
@@ -381,8 +644,8 @@ QPushButton:hover {
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1282</width>
-     <height>24</height>
+     <width>1280</width>
+     <height>33</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuDevice">
