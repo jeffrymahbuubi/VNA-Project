@@ -14,6 +14,7 @@ settings.local.json
 claude-scientific-skills
 .serena
 gh
+LibreVNA Data Collector
 
 # Copilot CLI - exclude personal files but keep mcp-config.json
 .copilot/logs/
