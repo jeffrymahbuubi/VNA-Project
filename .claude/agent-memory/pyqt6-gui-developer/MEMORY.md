@@ -74,6 +74,18 @@ Despite the agent name, this project uses PySide6. Import `Signal`, `Slot` from 
 - `_on_monitor_point()` simplified to only update model (status display moved to elapsed_tick handler).
 - Both new signals must be disconnected in `_stop_monitor_worker()` to prevent stale callbacks.
 
+## Save Data Folder Feature (2026-02-26)
+- Default save location changed from `code/LibreVNA-dev/data/` to `code/LibreVNA-dev/gui/data/` (one level up from `_MODULE_DIR` instead of two)
+- Three default-path sites changed: `vna_backend.py` export_dataflux_csv (line 147), save_csv_bundle (line 735), `backend_wrapper.py` save_results (line 678)
+- `VNADataModel.save_data_folder: Optional[str] = None` -- None means use default
+- `QSettings("LibreVNA", "VNAPlotter")` key `"save_data_folder"` persists across app restarts
+- View: `show_save_folder_dialog()`, `persist_save_folder()`, `get_persisted_save_folder()`, `show_save_folder_label()`
+- Presenter: `_on_save_data_folder_requested()` slot, restores from QSettings in `_on_startup()`
+- Workers: `VNASweepWorker` and `VNAMonitorWorker` accept `base_output_dir` param at construction
+- Thread path: Presenter reads `model.save_data_folder` -> passes to worker constructor -> worker passes to adapter methods
+- `backend_wrapper.py` `save_results()` gained `base_output_dir` param; `stop_recording()` gained `output_dir` param
+- When custom folder set, dated YYYYMMDD subdir is created inside it (same pattern as default)
+
 ## Key Constants (vna_backend.py)
 - SCPI_HOST="localhost", SCPI_PORT=19542, STREAMING_PORT=19001
 - GUI_START_TIMEOUT_S=30.0, CONTINUOUS_TIMEOUT_S=300
