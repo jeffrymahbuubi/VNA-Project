@@ -964,6 +964,16 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         self.actionSerial_LibreVNA_USB.setText("Searching... (LibreVNA/USB)")
         self.actionSerial_LibreVNA_USB.setEnabled(False)
 
+    def set_device_cleaning(self):
+        """
+        Show port-cleanup state in the Device > Connect to menu.
+
+        Displayed while the background PortCleanupWorker is killing stale
+        processes that hold LibreVNA ports, before retrying device probe.
+        """
+        self.actionSerial_LibreVNA_USB.setText("Cleaning ports... (LibreVNA/USB)")
+        self.actionSerial_LibreVNA_USB.setEnabled(False)
+
     def set_device_not_found(self):
         """
         Show not-found state in the Device > Connect to menu.
