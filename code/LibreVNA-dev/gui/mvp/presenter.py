@@ -537,6 +537,8 @@ class VNAMonitorWorker(QThread):
     monitor_point = Signal(object)         # MonitorRecord
     monitor_saved = Signal(str)            # CSV path
     error_occurred = Signal(str)           # error message
+    sweep_preview = Signal(list, list)     # (freqs_hz, s11_db) for live plot update
+    elapsed_tick = Signal(float)           # elapsed seconds since recording started
 
     def __init__(
         self,
@@ -621,30 +623,35 @@ class VNAMonitorWorker(QThread):
             if eff_log_ms <= 0:
                 eff_log_ms = mean_ms
 
-            # Step 4: Start recording with callback
+            # Step 4: Start recording with callbacks
             def _point_callback(record):
                 """Called from streaming thread for each logged point."""
                 self.monitor_point.emit(record)
 
+            def _preview_cb(freqs, s11_db):
+                """Called from streaming thread with full sweep data for live plot."""
+                self.sweep_preview.emit(freqs, s11_db)
+
             self.adapter.start_recording(
                 point_callback=_point_callback,
                 effective_log_interval_ms=eff_log_ms,
+                preview_callback=_preview_cb,
             )
 
             if self._cancel_event.is_set():
                 return
 
-            # Step 5: Wait loop
+            # Step 5: Wait loop (emits elapsed_tick every 0.25s for UI display)
             start_time = time.time()
             while not self._cancel_event.wait(timeout=0.25):
+                elapsed = time.time() - start_time
+                self.elapsed_tick.emit(elapsed)
                 # Check duration limit
-                if self.duration_s > 0:
-                    elapsed = time.time() - start_time
-                    if elapsed >= self.duration_s:
-                        logger.info(
-                            "Monitor duration reached (%.1f s)", self.duration_s
-                        )
-                        break
+                if self.duration_s > 0 and elapsed >= self.duration_s:
+                    logger.info(
+                        "Monitor duration reached (%.1f s)", self.duration_s
+                    )
+                    break
 
             # Step 6: Stop recording and export CSV
             csv_path = self.adapter.stop_recording()
@@ -1387,6 +1394,12 @@ class VNAPresenter(QObject):
         self._monitor_worker.error_occurred.connect(
             self._on_monitor_error
         )
+        self._monitor_worker.sweep_preview.connect(
+            self._on_monitor_sweep_preview
+        )
+        self._monitor_worker.elapsed_tick.connect(
+            self._on_monitor_elapsed
+        )
 
         # Update UI state
         self._monitoring = True
@@ -1718,19 +1731,43 @@ class VNAPresenter(QObject):
         """
         Called for each logged monitor data point.
 
-        Updates the model and status bar with the latest measurement.
+        Updates the model with the latest measurement. Status bar display is
+        handled by _on_monitor_elapsed() which runs on a faster tick (0.25s)
+        and includes both point count and elapsed time.
 
         Args:
             record: MonitorRecord from the streaming callback
         """
         self.model.add_monitor_record(record)
+
+    @Slot(list, list)
+    def _on_monitor_sweep_preview(self, freqs: list, s11_db: list):
+        """
+        Update live-preview plot with latest Monitor sweep data.
+
+        Called from the monitor worker's streaming callback via Qt signal.
+        Each complete sweep emits the full frequency/S11 arrays so the
+        main plot stays alive during monitor recording.
+
+        Args:
+            freqs: Frequency array in Hz (list of float)
+            s11_db: S11 magnitude in dB (list of float)
+        """
+        if freqs and s11_db:
+            self.view.update_plot(freqs, s11_db)
+
+    @Slot(float)
+    def _on_monitor_elapsed(self, elapsed_s: float):
+        """
+        Show elapsed time and point count in the status bar during monitoring.
+
+        Called every 0.25 seconds from the monitor worker's poll loop.
+
+        Args:
+            elapsed_s: Seconds elapsed since recording started
+        """
         count = len(self.model.monitor_records)
-        self.view.show_status_message(
-            f"Monitor: {count} points -- "
-            f"f={record.freq_hz / 1e6:.3f} MHz, "
-            f"S11={record.s11_db:.1f} dB",
-            timeout=0,
-        )
+        self.view.set_monitor_elapsed(elapsed_s, count)
 
     @Slot(str)
     def _on_monitor_saved(self, csv_path: str):
@@ -2028,6 +2065,12 @@ class VNAPresenter(QObject):
                 )
                 self._monitor_worker.error_occurred.disconnect(
                     self._on_monitor_error
+                )
+                self._monitor_worker.sweep_preview.disconnect(
+                    self._on_monitor_sweep_preview
+                )
+                self._monitor_worker.elapsed_tick.disconnect(
+                    self._on_monitor_elapsed
                 )
             except (RuntimeError, TypeError):
                 pass  # Signals already disconnected
