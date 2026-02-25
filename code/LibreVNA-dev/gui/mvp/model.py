@@ -210,6 +210,11 @@ class VNADataModel:
         self.config = SweepConfig()
         self.monitor_config = MonitorConfig()
 
+        # User-configured save directory. None means use the default
+        # (gui/data/YYYYMMDD/). When set, all save operations create a
+        # dated sub-directory under this path instead.
+        self.save_data_folder: Optional[str] = None
+
         # Storage for sweep measurements
         self.sweep_data: List[SweepData] = []
         self.sweep_times: List[float] = []
