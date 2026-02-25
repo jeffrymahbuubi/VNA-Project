@@ -814,23 +814,76 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         """Clear plot data (empty trace)."""
         self.plot_data_item.setData([], [])
 
+    def _format_freq_hz(self, hz: float) -> str:
+        """Format a frequency in Hz to a human-readable string with units.
+
+        Rules:
+          - hz >= 1e9: display in GHz (e.g. "2.43 GHz", "3 GHz")
+          - hz < 1e9:  display in MHz (e.g. "200 MHz", "200.5 MHz")
+          - Up to 3 decimal places, trailing zeros stripped.
+
+        Args:
+            hz: Frequency value in Hz.
+
+        Returns:
+            Formatted string like "2.43 GHz" or "200 MHz".
+        """
+        if hz >= 1e9:
+            val = hz / 1e9
+            unit = "GHz"
+        else:
+            val = hz / 1e6
+            unit = "MHz"
+        formatted = f"{val:.3f}".rstrip("0").rstrip(".")
+        return f"{formatted} {unit}"
+
+    @staticmethod
+    def _parse_freq_hz(text: str) -> int:
+        """Parse a frequency string with optional unit suffix back to Hz.
+
+        Accepts formats produced by _format_freq_hz (e.g. "2.43 GHz",
+        "200 MHz") as well as plain numeric values which are assumed to
+        be in MHz for backward compatibility.
+
+        Args:
+            text: The text from a frequency QLineEdit.
+
+        Returns:
+            Frequency in Hz as an integer, or 0 on parse failure.
+        """
+        text = text.strip()
+        if not text:
+            return 0
+        try:
+            lower = text.lower()
+            if lower.endswith("ghz"):
+                return int(float(text[:-3].strip()) * 1e9)
+            elif lower.endswith("mhz"):
+                return int(float(text[:-3].strip()) * 1e6)
+            else:
+                # Fallback: assume plain number in MHz (backward compat)
+                return int(float(text) * 1e6)
+        except ValueError:
+            return 0
+
     def populate_sweep_config(self, config: dict, monitor_config: Optional[dict] = None):
         """
         Populate configuration widgets from config dictionary.
 
         Maps model fields to the actual widget names from the .ui file:
-          start_frequency  -> startFrequencyLineEdit  (displayed as MHz)
-          stop_frequency   -> stopFrequencyLineEdit   (displayed as MHz)
+          start_frequency  -> startFrequencyLineEdit  (displayed with units)
+          stop_frequency   -> stopFrequencyLineEdit   (displayed with units)
           num_points       -> pointsLineEdit
           stim_lvl_dbm     -> levelLineEdit
           num_sweeps       -> numberOfSweepLineEdit
           ifbw_values      -> ifbwFrequencyLineEdit (comma-separated)
 
-        Frequency values are stored in Hz internally but displayed as MHz
-        in the UI for readability. The read_sweep_config() method converts
-        MHz back to Hz when reading.
+        Frequency values are stored in Hz internally but displayed with
+        human-readable units (e.g. "2.43 GHz", "200 MHz") via
+        _format_freq_hz(). The read_sweep_config() method uses
+        _parse_freq_hz() to convert back to Hz when reading.
 
-        Also computes and displays center and span frequencies (in MHz).
+        Also computes and displays center and span frequencies with units.
 
         Args:
             config: Dictionary with keys matching SweepConfig fields (Hz)
@@ -838,23 +891,23 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
                 If provided, populates logIntervallineEdit from
                 'log_interval_ms' (unless it is "auto").
         """
-        # Frequency settings -- display as MHz (model uses Hz)
+        # Frequency settings -- display with human-readable units (model uses Hz)
         if "start_frequency" in config:
             start_hz = config["start_frequency"]
-            self.startFrequencyLineEdit.setText(f"{start_hz / 1e6:.3f}")
+            self.startFrequencyLineEdit.setText(self._format_freq_hz(start_hz))
 
         if "stop_frequency" in config:
             stop_hz = config["stop_frequency"]
-            self.stopFrequencyLineEdit.setText(f"{stop_hz / 1e6:.3f}")
+            self.stopFrequencyLineEdit.setText(self._format_freq_hz(stop_hz))
 
-        # Compute and populate center and span (displayed as MHz)
+        # Compute and populate center and span with human-readable units
         start = config.get("start_frequency", 0)
         stop = config.get("stop_frequency", 0)
         if start and stop:
             center = (start + stop) / 2.0
             span = stop - start
-            self.centerFrequencyLineEdit.setText(f"{center / 1e6:.3f}")
-            self.spanFrequencyLineEdit.setText(f"{span / 1e6:.3f}")
+            self.centerFrequencyLineEdit.setText(self._format_freq_hz(center))
+            self.spanFrequencyLineEdit.setText(self._format_freq_hz(span))
 
         # Acquisition settings
         if "num_points" in config:
@@ -881,8 +934,9 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
         """
         Read configuration values from widgets.
 
-        Frequency values are displayed in MHz but stored internally in Hz.
-        This method converts the MHz display values back to Hz.
+        Frequency values are displayed with human-readable units
+        (e.g. "2.43 GHz", "200 MHz") but stored internally in Hz.
+        This method uses _parse_freq_hz() to convert back to Hz.
 
         Returns:
             Dictionary with config values (strings converted to appropriate types).
@@ -901,16 +955,9 @@ class VNAMainWindow(QMainWindow, Ui_MainWindow):
             except ValueError:
                 ifbw_values = []
 
-        # Frequency values: displayed as MHz, convert to Hz (int)
-        try:
-            start_freq = int(float(self.startFrequencyLineEdit.text() or 0) * 1e6)
-        except ValueError:
-            start_freq = 0
-
-        try:
-            stop_freq = int(float(self.stopFrequencyLineEdit.text() or 0) * 1e6)
-        except ValueError:
-            stop_freq = 0
+        # Frequency values: displayed with units (e.g. "2.43 GHz"), convert to Hz
+        start_freq = self._parse_freq_hz(self.startFrequencyLineEdit.text())
+        stop_freq = self._parse_freq_hz(self.stopFrequencyLineEdit.text())
 
         try:
             num_points = int(self.pointsLineEdit.text() or 0)
