@@ -637,7 +637,11 @@ class GUIVNASweepAdapter:
         # Install monkey patch (ONCE -- never call this method again)
         self.sweep._make_callback = wrapped_make_callback
 
-    def save_results(self, custom_dirname: Optional[str] = None) -> str:
+    def save_results(
+        self,
+        custom_dirname: Optional[str] = None,
+        base_output_dir: Optional[str] = None,
+    ) -> str:
         """
         Export all accumulated results to CSV bundle directory.
 
@@ -654,7 +658,10 @@ class GUIVNASweepAdapter:
         Args:
             custom_dirname: Optional custom directory name (replaces auto-generated
                 timestamp-based name). The directory will be created in the standard
-                output directory (../../data/YYYYMMDD/).
+                output directory.
+            base_output_dir: Optional base output directory. If provided, the
+                dated subdirectory (YYYYMMDD/) is created inside it. If None,
+                falls back to the default: gui/data/YYYYMMDD/.
 
         Returns:
             Absolute path to the output directory (not a file)
@@ -662,10 +669,13 @@ class GUIVNASweepAdapter:
         if not self.all_results:
             raise ValueError("No sweep results to save")
 
-        # Build output directory (same as vna_backend.py default: ../../data/YYYYMMDD/)
+        # Build output directory
         import datetime
         today = datetime.datetime.now().strftime("%Y%m%d")
-        base_out_dir = os.path.join(_MODULE_DIR, "..", "..", "data", today)
+        if base_output_dir is not None:
+            base_out_dir = os.path.join(base_output_dir, today)
+        else:
+            base_out_dir = os.path.join(_MODULE_DIR, "..", "data", today)
         os.makedirs(base_out_dir, exist_ok=True)
 
         # Call save_csv_bundle() which returns the full output directory path
@@ -1044,9 +1054,15 @@ class GUIVNAMonitorAdapter:
         self.vna.cmd(":VNA:ACQ:RUN")
         logger.info("Monitor acquisition started")
 
-    def stop_recording(self) -> Optional[str]:
+    def stop_recording(self, output_dir: Optional[str] = None) -> Optional[str]:
         """
         Stop the monitor recording and export Dataflux CSV.
+
+        Parameters
+        ----------
+        output_dir : str or None
+            Base output directory for the CSV.  If None, the backend
+            uses its default (gui/data/YYYYMMDD/).
 
         Returns
         -------
@@ -1090,6 +1106,7 @@ class GUIVNAMonitorAdapter:
             start_freq_hz=self.sweep.start_freq_hz,
             stop_freq_hz=self.sweep.stop_freq_hz,
             num_points=self.sweep.num_points,
+            output_dir=output_dir,
         )
         logger.info("Monitor CSV exported: %s (records=%d)",
                      csv_path, len(self._monitor_records))
