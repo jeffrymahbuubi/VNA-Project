@@ -28,6 +28,7 @@ from .view import VNAMainWindow
 from .backend_wrapper import (
     GUIVNASweepAdapter, GUIVNAMonitorAdapter, probe_device_serial,
     _is_scpi_server_running, _start_gui_subprocess,
+    find_port_owners, kill_port_users,
 )
 from .vna_backend import SCPI_HOST, SCPI_PORT, STREAMING_PORT, _MODULE_DIR
 from .libreVNA import libreVNA
@@ -63,6 +64,46 @@ class DeviceProbeWorker(QThread):
             self.serial_detected.emit(device_info)
         except Exception as e:
             self.probe_failed.emit(str(e))
+
+
+class PortCleanupWorker(QThread):
+    """
+    Background worker that kills stale processes holding LibreVNA ports.
+
+    Runs find_port_owners() to detect which LibreVNA ports are occupied,
+    then kill_port_users() to terminate the offending processes (respecting
+    the SAFE_PROCESS_NAMES exclusion list).
+
+    Designed to run between a failed device probe and a retry attempt,
+    so the GUI can automatically recover from stale port locks left by
+    a previous unclean shutdown.
+    """
+
+    # Signals emitted TO presenter (received on GUI thread via Qt signal/slot)
+    cleanup_completed = Signal(int)   # number of processes killed
+    cleanup_failed = Signal(str)      # error message
+
+    def run(self):
+        """
+        Execute port cleanup in background thread.
+
+        Calls find_port_owners() and kill_port_users() from the backend
+        wrapper.  Emits cleanup_completed with the kill count on success,
+        or cleanup_failed with an error message on exception.
+        """
+        try:
+            port_owners = find_port_owners()
+            if not port_owners:
+                logger.info("Port cleanup: no stale processes found on LibreVNA ports")
+                self.cleanup_completed.emit(0)
+                return
+
+            killed = kill_port_users(port_owners)
+            logger.info("Port cleanup: terminated %d process(es)", killed)
+            self.cleanup_completed.emit(killed)
+        except Exception as e:
+            logger.error("Port cleanup failed: %s", e)
+            self.cleanup_failed.emit(str(e))
 
 
 class VNAPreviewWorker(QThread):
@@ -659,6 +700,10 @@ class VNAPresenter(QObject):
         self._probe_worker: Optional[DeviceProbeWorker] = None
         self._gui_process = None  # Subprocess handle if GUI was started by probe
 
+        # Port cleanup worker state (auto-cleanup on probe failure)
+        self._cleanup_worker: Optional[PortCleanupWorker] = None
+        self._cleanup_attempted = False  # True after one cleanup attempt per probe cycle
+
         # Preview worker state
         self._preview_worker: Optional[VNAPreviewWorker] = None
         self._previewing = False  # True when live preview is active
@@ -841,6 +886,9 @@ class VNAPresenter(QObject):
         serial = device_info.get('serial', 'Unknown')
         idn = device_info.get('idn', '')
 
+        # Reset cleanup state on successful detection
+        self._cleanup_attempted = False
+
         # Update model
         self.model.device.serial_number = serial
         self.model.device.idn_string = idn
@@ -867,8 +915,9 @@ class VNAPresenter(QObject):
         """
         Handle failed device detection from probe worker.
 
-        Shows "Not found" in the menu and logs the error to the status bar.
-        The user can retry by clicking the menu action.
+        On first failure, automatically attempts port cleanup (kills stale
+        processes holding LibreVNA ports) and retries the probe.  On second
+        failure (after cleanup), shows "Not found" in the menu.
 
         Args:
             error_message: Description of why the probe failed
@@ -877,7 +926,21 @@ class VNAPresenter(QObject):
         self.model.device.connected = False
         self.model.device.serial_number = ""
 
-        # Update view
+        if not self._cleanup_attempted:
+            # First failure: attempt automatic port cleanup before giving up
+            self._cleanup_attempted = True
+            logger.info(
+                "Device probe failed (%s) — attempting automatic port cleanup",
+                error_message,
+            )
+            self.view.set_device_cleaning()
+            self.view.show_status_message(
+                "Device not found. Cleaning up stale ports...", timeout=0
+            )
+            self._start_port_cleanup()
+            return
+
+        # Second failure (after cleanup): show final "Not found" state
         self.view.set_device_not_found()
         self.view.show_status_message(
             f"Device detection failed: {error_message}", timeout=10000
@@ -886,12 +949,67 @@ class VNAPresenter(QObject):
         # Update button state
         self._update_collect_button_state()
 
+    def _start_port_cleanup(self):
+        """
+        Launch a background PortCleanupWorker to kill stale processes on
+        LibreVNA ports.
+
+        Called automatically by _on_probe_failed() on the first probe
+        failure.  On completion, retries the device probe.
+        """
+        if self._cleanup_worker is not None and self._cleanup_worker.isRunning():
+            return  # Cleanup already in progress
+
+        self._cleanup_worker = PortCleanupWorker()
+        self._cleanup_worker.cleanup_completed.connect(self._on_cleanup_completed)
+        self._cleanup_worker.cleanup_failed.connect(self._on_cleanup_failed)
+        self._cleanup_worker.start()
+
+    @Slot(int)
+    def _on_cleanup_completed(self, killed: int):
+        """
+        Handle successful port cleanup — retry the device probe.
+
+        Args:
+            killed: Number of stale processes terminated
+        """
+        if killed > 0:
+            logger.info("Port cleanup killed %d process(es) — retrying probe", killed)
+            self.view.show_status_message(
+                f"Cleaned up {killed} stale process(es). Retrying device detection...",
+                timeout=0,
+            )
+        else:
+            logger.info("Port cleanup found no stale processes — retrying probe anyway")
+            self.view.show_status_message(
+                "No stale processes found. Retrying device detection...", timeout=0
+            )
+
+        # Retry the device probe
+        self._start_device_probe()
+
+    @Slot(str)
+    def _on_cleanup_failed(self, error_message: str):
+        """
+        Handle failed port cleanup — show error and give up.
+
+        Args:
+            error_message: Description of why cleanup failed
+        """
+        logger.error("Port cleanup failed: %s", error_message)
+        self.view.set_device_not_found()
+        self.view.show_status_message(
+            f"Port cleanup failed: {error_message}", timeout=10000
+        )
+        self._update_collect_button_state()
+
     @Slot()
     def _on_connect_device_requested(self):
         """
         Handle Device > Connect to menu action click.
 
         Re-launches the device probe if not currently running.
+        Resets the cleanup-attempted flag so a fresh cleanup cycle can occur.
         """
         if self._collecting:
             self.view.show_status_message(
@@ -899,6 +1017,8 @@ class VNAPresenter(QObject):
             )
             return
 
+        # Reset cleanup state so user-initiated retry gets a fresh cleanup cycle
+        self._cleanup_attempted = False
         self._start_device_probe()
 
     def _stop_probe_gui_process(self):
