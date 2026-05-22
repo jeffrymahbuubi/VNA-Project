@@ -429,6 +429,175 @@ At session start you should see either `N imported` (first time or after changes
 
 ---
 
+## Windows Environment Setup
+
+> **Read this BEFORE running `npm install` if you're on Windows.** The default doc above is Linux-flavoured. Windows needs three prerequisite tools and three patches to project files. Verified end-to-end on Windows 11 Pro 22631 on 2026-05-22 against ruflo@3.6.10.
+
+### Prerequisites
+
+| Tool | Version | Why |
+|---|---|---|
+| **Node.js** | **22 LTS** (any 22.x). NOT Node 25 or 26. | `better-sqlite3@11.10.0` (pinned by `@claude-flow/memory`) uses V8 APIs `Object::GetPrototype`, `Context::GetIsolate`, and `PropertyCallbackInfo::This` that were removed in V8 13.x (Node ≥25). Compile fails with `error C2039`. |
+| **Git for Windows** | Any recent | Provides `sh.exe` at `C:\Program Files\Git\usr\bin\sh.exe` — the SessionStart hook pattern `sh -c 'exec node …'` will silently no-op without it. |
+| **Visual Studio 2022 Community / Build Tools** | with **Desktop development with C++** workload | node-gyp falls back to source build when no prebuilt binary matches Node 22 ABI 127. Must include MSBuild + Windows 10/11 SDK + MSVC v143. |
+| **Windows long paths** | `HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1` | Nested `node_modules/@claude-flow/*/node_modules/...` paths routinely exceed 260 chars. Without this, npm cleanup raises `EPERM rmdir` and partially extracted packages stay broken. |
+
+**Check from PowerShell before installing:**
+
+```powershell
+node --version                                   # must report v22.x
+where.exe sh                                     # must show C:\Program Files\Git\usr\bin\sh.exe
+where.exe msbuild                                # any VS2022 path is fine
+(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled).LongPathsEnabled  # 1
+```
+
+### Switching Node version (if you have Node ≥25 active)
+
+`nvm-windows` makes this a 30-second operation:
+
+```powershell
+nvm install 22
+nvm use 22.22.3        # or whatever the latest 22.x is
+node --version         # confirm v22.x
+```
+
+> **PATH gotcha:** Some Windows machines have multiple Node installs (`C:\Program Files\node\`, `scoop\apps\nodejs\`, and the nvm-managed one). `where.exe node` will list them in PATH order. If the wrong one is first, fix PATH or delete the standalone before relying on `nvm use`.
+
+### Three patches needed on Windows
+
+#### Patch 1 — `.mcp.json` MCP entry uses `cmd /c npx`, not bare `npx`
+
+On Windows `npx` is `npx.cmd`. Direct `"command": "npx"` fails for several MCP runtimes. Use the `cmd /c` wrapper that the rest of your `.mcp.json` already uses:
+
+```jsonc
+"claude-flow": {
+  "type": "stdio",
+  "command": "cmd",
+  "args": ["/c", "npx", "-y", "ruflo@3.6.10", "mcp", "start"],
+  "env": {
+    "CLAUDE_FLOW_MODE": "v3",
+    "CLAUDE_FLOW_HOOKS_ENABLED": "true",
+    "CLAUDE_FLOW_TOPOLOGY": "hierarchical-mesh",
+    "CLAUDE_FLOW_MAX_AGENTS": "15",
+    "CLAUDE_FLOW_MEMORY_BACKEND": "hybrid"
+  }
+}
+```
+
+#### Patch 2 — `.claude/helpers/auto-memory-hook.mjs` cross-platform fixes (two bugs)
+
+The hook ships with two Linux-only assumptions in `getMemoryDirHash()`. The fix branches on `process.platform` so the same file is correct on both Windows and Linux/macOS — keep the file tracked in git rather than gitignoring per platform:
+
+```javascript
+// BEFORE (Linux-only — silently broken on Windows)
+const homeDir = process.env.HOME || '';
+const projectKey = PROJECT_ROOT.replace(/\//g, '-');
+
+// AFTER (cross-platform, OS-conditional)
+const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+// Claude Code derives the project key by replacing filename-unsafe path characters with '-'.
+// The exact character set differs per OS:
+//   - Linux/macOS: only '/' (paths don't contain ':' or '\')
+//   - Windows: '/', '\', ':', '.', and ' ' all map to '-'
+//     (verified: `D:\AUNUUN ...\54. LibreVNA ...` -> `D--AUNUUN-...-54--LibreVNA-...`)
+const projectKey = process.platform === 'win32'
+  ? PROJECT_ROOT.replace(/[\\\/:. ]/g, '-')
+  : PROJECT_ROOT.replace(/\//g, '-');
+```
+
+**Why both fixes are needed:**
+- `process.env.HOME` is rarely set on Windows; `USERPROFILE` (e.g. `C:\Users\<name>`) is the canonical replacement. Linux/macOS always have `HOME`, so the `||` chain selects correctly per OS.
+- The `/\//g` regex alone never matched on Windows (Windows paths use backslashes, not forward slashes). A naïve broadened regex like `/[\\\/:. ]/g` would also over-convert Linux paths containing dots or spaces (e.g. `/home/user/.config/My Project` → `-home-user--config-My-Project` would not match the directory Claude Code actually creates on Linux, which is `-home-user-.config-My Project`). Branching on `process.platform` keeps each OS's behaviour intact.
+
+Without both fixes, the dedup manifest can never match on Windows, so the hook silently re-imports on every session (the "0 imported (0 skipped)" pathology).
+
+**Verify the patch works** before continuing (works on both Windows and Linux):
+
+```bash
+node -e "
+const root = process.cwd();
+const home = process.env.HOME || process.env.USERPROFILE || '';
+const key = process.platform === 'win32'
+  ? root.replace(/[\\\\\/:. ]/g, '-')
+  : root.replace(/\\//g, '-');
+console.log('platform :', process.platform);
+console.log('memoryDir:', require('path').join(home, '.claude', 'projects', key, 'memory'));
+console.log('exists   :', require('fs').existsSync(require('path').join(home, '.claude', 'projects', key, 'memory')));
+"
+```
+
+The reported `memoryDir` must match the real path under `~/.claude/projects/` (Linux/macOS) or `C:\Users\<you>\.claude\projects\` (Windows) and `exists: true`.
+
+#### Patch 3 — `.claude/settings.json` SessionStart hooks (same as Linux, but verify Git Bash is on PATH)
+
+The `sh -c 'exec node "${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/auto-memory-hook.mjs" import --skip-if-exists'` pattern is unchanged from Linux. Claude Code resolves `sh` via the system PATH — Git Bash places it there automatically.
+
+If `where.exe sh` returns nothing, either reinstall Git for Windows with "Use Git Bash from Command Prompt" enabled, or rewrite the hooks to call `node.exe` directly without the shell wrapper.
+
+### Common Windows install failures
+
+#### Symptom: `error C2039: 'GetPrototype' is not a member of 'v8::Object'`
+
+**Cause:** Active Node version is ≥25. Switch to Node 22 LTS (see above) and re-install. The complete error signature also includes:
+- `'GetIsolate': is not a member of 'v8::Context'`
+- `'This': is not a member of 'v8::PropertyCallbackInfo<v8::Value>'`
+
+#### Symptom: `npm warn cleanup EPERM: operation not permitted, rmdir '…\node_modules\@claude-flow\memory\node_modules\better-sqlite3\build\…'`
+
+**Cascade effect** of a failed native build, not the root cause. Don't waste time chasing AV exclusions — fix the underlying compile error (usually Node version). Once `better-sqlite3` builds clean, the EPERM warnings vanish.
+
+If they persist *after* a clean build:
+- Confirm `LongPathsEnabled = 1` (registry key above)
+- Close any IDE/Explorer windows that have `node_modules/` open
+- Add the project root to Windows Defender exclusions (`Add-MpPreference -ExclusionPath ...`)
+
+#### Symptom: Statusbar `Vectors ●0` despite successful install
+
+The hook silently fails to find the user's memory directory because of Patch 2 not being applied. Run:
+
+```powershell
+node .claude/helpers/auto-memory-hook.mjs import
+```
+
+If the output is the green `✓ Imported 0 entries` but `.claude-flow/data/import-manifest.json` shows `"memoryHash": null`, the regex in `getMemoryDirHash()` still has the Linux-only `/\//g` pattern — re-apply Patch 2.
+
+#### Symptom: `npm install` succeeds (exit 0) but some `@claude-flow/*` packages have no `package.json`
+
+Specifically: `hooks`, `memory`, `neural` show only an empty `node_modules/` subdir. This is the EPERM cascade from a failed `better-sqlite3` native build. The packages are **never installed**, just stubs. `npm install` falsely reports success because the failure happens during cleanup, not extraction. **Fix:** delete `node_modules/` and `package-lock.json`, switch to Node 22, then `npm install` again.
+
+### Windows-tailored install sequence
+
+Combines [New Project Setup](#new-project-setup) Steps 1–5 with the patches above:
+
+```powershell
+# 1. Prerequisite check
+node --version          # expect v22.x — if not, `nvm install 22; nvm use 22`
+where.exe sh            # expect C:\Program Files\Git\usr\bin\sh.exe
+where.exe msbuild       # any VS2022 path
+
+# 2. Clean any prior failed install
+if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
+if (Test-Path package-lock.json) { Remove-Item -Force package-lock.json }
+
+# 3. Add ruflo dep, install
+# (edit package.json to add "ruflo": "^3.6.10" to devDependencies)
+npm install
+
+# 4. Apply Patch 2 to .claude/helpers/auto-memory-hook.mjs (HOME fallback + regex)
+# Apply Patch 1 to .mcp.json (cmd /c npx wrapper)
+
+# 5. Verify
+node .claude/helpers/auto-memory-hook.mjs import     # must say "Imported N entries"
+npx ruflo@3.6.10 memory stats                        # must show sql.js + HNSW backend
+
+# 6. Download embedding model (~90 MB, one-time)
+npx agentdb install-embeddings
+```
+
+Expected total time on a 100 Mbit connection: ~3 minutes (~2 min for `npm install` including native compile, ~1 min for embedding deps).
+
+---
+
 ## New Project Setup
 
 > **Read this first when setting up claude-flow on a fresh project.** The auto-memory bridge has a foundational dependency that the `.mcp.json` and `settings.json` snippets in [Setup Reference](#setup-reference) do **not** cover.
