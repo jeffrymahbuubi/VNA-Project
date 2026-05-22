@@ -571,7 +571,10 @@ Edit `C:\Users\<you>\.claude\settings.json`:
 ```json
 {
   "autoUpdatesChannel": "latest",
-  "statusLine": "node .claude/helpers/statusline.cjs"
+  "statusLine": {
+    "type": "command",
+    "command": "node .claude/helpers/statusline.cjs"
+  }
 }
 ```
 
