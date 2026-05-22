@@ -363,7 +363,7 @@ async def main():
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("/home/user/jeffrymahbuubi/PROJECTS/7-LibreVNA-Vector-Network-Analyzer/.mcp.json"),
+        default=Path("/home/user/jeffrymahbuubi/PROJECTS/6-LibreVNA-Vector-Network-Analyzer/.mcp.json"),
         help="Path to MCP configuration file (default: .mcp.json in project root)",
     )
 
@@ -377,7 +377,7 @@ async def main():
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/home/user/jeffrymahbuubi/PROJECTS/7-LibreVNA-Vector-Network-Analyzer/scripts/python/mcp_scan_results.json"),
+        default=Path("/home/user/jeffrymahbuubi/PROJECTS/6-LibreVNA-Vector-Network-Analyzer/scripts/python/mcp_scan_results.json"),
         help="Path to save JSON results (default: mcp_scan_results.json)",
     )
 
