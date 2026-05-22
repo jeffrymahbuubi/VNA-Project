@@ -27,3 +27,11 @@ LibreVNA Data Collector
 
 # LibreVNA-GUI generated config directory
 LibreVNA/
+
+# ─── Claude-Flow — entire folder excluded (tool-managed, not project code) ───
+.claude-flow/
+.swarm/
+ruvector.db
+
+# ─── Node ───
+node_modules/
