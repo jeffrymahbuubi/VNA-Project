@@ -39,9 +39,16 @@ if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 // Returns an MD5 hash of all *.md files in the project's auto-memory directory.
 // Returns null if the directory doesn't exist or is empty.
 function getMemoryDirHash() {
-  const homeDir = process.env.HOME || '';
-  // Claude Code derives the project key by replacing every '/' in the path with '-'
-  const projectKey = PROJECT_ROOT.replace(/\//g, '-');
+  // HOME is the canonical env var on Linux/macOS; USERPROFILE is its Windows equivalent.
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+  // Claude Code derives the project key by replacing filename-unsafe path characters with '-'.
+  // The exact character set differs per OS:
+  //   - Linux/macOS: only '/' (paths don't contain ':' or '\\')
+  //   - Windows: '/', '\\', ':', '.', and ' ' all map to '-'
+  //     (verified: `D:\\AUNUUN ...\\54. LibreVNA ...` -> `D--AUNUUN-...-54--LibreVNA-...`)
+  const projectKey = process.platform === 'win32'
+    ? PROJECT_ROOT.replace(/[\\\/:. ]/g, '-')
+    : PROJECT_ROOT.replace(/\//g, '-');
   const memoryDir = join(homeDir, '.claude', 'projects', projectKey, 'memory');
   if (!existsSync(memoryDir)) return null;
   try {
