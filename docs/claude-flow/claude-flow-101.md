@@ -534,6 +534,69 @@ The `sh -c 'exec node "${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/auto-memory-hook
 
 If `where.exe sh` returns nothing, either reinstall Git for Windows with "Use Git Bash from Command Prompt" enabled, or rewrite the hooks to call `node.exe` directly without the shell wrapper.
 
+---
+
+### Statusline Panel — Wiring the RuFlo Status Bar
+
+> **Verified 2026-05-22 against ruflo@3.6.30 on Windows 11 Pro 22631.**
+
+The multi-line status panel that appears at the top of every Linux Claude Code session:
+
+```
+ ▊ RuFlo V3.6.30 ● User  │  ⏇ main  │  Opus 4.7  │  ⏱ 0s
+  🏗️   DDD Domains    [○○○○○]  0/5    ⚡ HNSW 10x
+  🤖 Swarm  ○ [ 0/15]  👥 0    🪝  5/5    🔴 CVE 0/0    💾 4MB    🧠   0%
+  🔧 Architecture    ADRs ●0/0  │  DDD ●  0%  │  Security ●PENDING
+  📊 AgentDB    Vectors ●1⚡  │  Size 144KB  │  Tests ●0 (~0 cases)  │  MCP ●7/7  ◆DB  ◆API
+```
+
+…does **not** appear on Windows by default even after a successful install. The script is present and functional — it just is not wired into Claude Code's terminal UI.
+
+**Root cause:** Claude Code displays a statusline only when the `statusLine` key exists in settings. `npx ruflo init` writes this key automatically on Linux; on Windows the init step is typically skipped, so the key is never written.
+
+**Diagnosis — confirm the script itself works:**
+
+```powershell
+node .claude/helpers/statusline.cjs
+```
+
+If the coloured panel appears in the terminal, the script is fine. The only missing piece is the Claude Code settings key.
+
+> **If the command errors** with "Cannot find module", the project's `node_modules/` install is incomplete — follow [New Project Setup](#new-project-setup) first.
+
+**Fix — add `statusLine` to your global Claude Code settings:**
+
+Edit `C:\Users\<you>\.claude\settings.json`:
+
+```json
+{
+  "autoUpdatesChannel": "latest",
+  "statusLine": "node .claude/helpers/statusline.cjs"
+}
+```
+
+Then **restart the Claude Code session**. The panel appears on next open in any project that contains `.claude/helpers/statusline.cjs`.
+
+**Scope options:**
+
+| Settings file | Effect |
+|---|---|
+| `C:\Users\<you>\.claude\settings.json` **(global)** | Panel appears in all projects on this Windows machine |
+| Project `.claude/settings.json` | Committed to git — enables the panel on Linux too if Linux doesn't already have the key |
+
+> **Why forward slashes work on Windows:** Node.js accepts both `\` and `/` in paths, so `node .claude/helpers/statusline.cjs` is portable across both OSes without modification.
+
+**Comparison table — before and after:**
+
+| | Linux | Windows (before) | Windows (after) |
+|---|---|---|---|
+| ruflo version in `.mcp.json` | 3.6.30 | 3.6.30 | 3.6.30 |
+| `.claude/helpers/statusline.cjs` present | ✓ | ✓ | ✓ |
+| `statusLine` key in settings | ✓ | **missing** | **added ✓** |
+| Panel visible on session open | ✓ | ✗ | ✓ |
+
+---
+
 ### Common Windows install failures
 
 #### Symptom: `error C2039: 'GetPrototype' is not a member of 'v8::Object'`
