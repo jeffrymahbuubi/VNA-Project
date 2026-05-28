@@ -33,5 +33,12 @@ LibreVNA/
 .swarm/
 ruvector.db
 
+# ─── AgentDB runtime artifacts ───
+agentdb.rvf
+agentdb.rvf.lock
+
+# ─── Third-party Amp Qt6 suite — vendor copy, not tracked here ───
+code/ena_qt6_suite/
+
 # ─── Node ───
 node_modules/
