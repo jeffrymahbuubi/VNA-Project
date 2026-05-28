@@ -10,7 +10,7 @@ A Python-based automation and custom GUI suite for the **LibreVNA** (open-source
 Network Analyzer). It originated from the "LibreVNA Validation Test Assignment" and
 evolved into:
 
-- A series of progressively complex SCPI automation scripts (`0` → `6`) that benchmark
+- A series of progressively complex SCPI automation scripts (`0` → `8`) that benchmark
   and characterize VNA performance.
 - A **PySide6 real-time data collector GUI** (`script 7`) built on the MVP pattern that
   wraps the validated `script 6` backend behind a user-friendly interface.
@@ -18,6 +18,18 @@ evolved into:
 Sweep-rate engineering is the central technical theme: the codebase moves from
 ~3.5 Hz (single-sweep polling) up to ~17 Hz (continuous + streaming) and documents a
 path to ~33 Hz via direct USB.
+
+### Biomedical Objective
+
+The deeper application goal is a **portable, low-cost replacement for the Keysight E5063A
+VNA** for non-invasive physiological monitoring. A resonant RF sensor placed near biological
+tissue or a pulsatile flow phantom exhibits a resonant-frequency shift (min S11) of
+±0.15–0.25 MHz around ~233.5 MHz as the nearby material deforms. The time-varying pattern
+of that shift encodes breathing rate (~0.2–0.4 Hz) and heartbeat (~1–2 Hz). The LibreVNA
+(`~$150`, USB-powered) targets field or bedside deployment as an alternative to the
+lab-grade Keysight instrument. The **Monitor Mode** feature (script 7 / `VNAMonitorWorker`)
+implements the Keysight "Dataflux" equivalent — logging one scalar `(timestamp, min_freq_Hz,
+min_dB)` per sweep into a compatible CSV that `8_plot_monitor_data.py` can analyse directly.
 
 ## 2. Top-level Layout
 
@@ -57,6 +69,7 @@ path to ~33 Hz via direct USB.
 | `4_ifbw_parameter_sweep.py` | IFBW impact on speed/jitter |
 | `5_continuous_sweep_speed.py` | Enables streaming server; registers callback on port 19001 |
 | `6_librevna_gui_mode_sweep_test.py` | **Unified single/continuous benchmark**, YAML-driven, multi-sheet xlsx export. `BaseVNASweep` → `SingleModeSweep` / `ContinuousModeSweep`. This is the backend the GUI wraps. |
+| `8_plot_monitor_data.py` | Visualize Dataflux-compatible CSV produced by Monitor Mode — scrolling time-series of min-freq, peak detection, BPM estimate. |
 | `libreVNA.py` | Thin SCPI/socket wrapper with `add_live_callback` for streaming. Known harmless bug at line 148. |
 
 ## 4. The Custom GUI — `code/LibreVNA-dev/gui/`
@@ -72,11 +85,11 @@ event loop. `cwd` is forced to `gui/` so relative `.cal` / `.yaml` lookups work.
 
 | File | Layer | Responsibility |
 |------|-------|----------------|
-| `model.py` | Model (pure Python, no Qt) | Dataclasses `DeviceInfo`, `CalibrationState`, `SweepConfig`, `SweepData`. `VNADataModel` holds state, validates config, computes statistics, converts S11 complex → dB. `SweepConfig.update_from_cal_file()` enforces the invariant that the cal file is the single source of truth for freq range and point count. |
-| `view.py` | View (PySide6) | `VNAMainWindow(QMainWindow, Ui_MainWindow)`. Replaces a `QLabel` placeholder with a `pyqtgraph.PlotWidget`, manages a blink animation timer, emits user-action signals — display only. |
-| `presenter.py` | Presenter | Mediates Model ↔ View; runs `DeviceProbeWorker` and `VNASweepWorker` as `QThread`s. All cross-thread updates via Qt signals. |
-| `backend_wrapper.py` | Adapter | `GUIVNASweepAdapter` decomposes script 6's `run()` into `start_lifecycle()` / `run_single_ifbw_sweep()` / `save_results()` / `stop_lifecycle()`. Also `probe_device_serial()` for startup detection. |
-| `vna_backend.py` | Standalone backend | Extracted `BaseVNASweep` and `ContinuousModeSweep` from script 6, with paths made configurable. |
+| `model.py` | Model (pure Python, no Qt) | Dataclasses `DeviceInfo`, `CalibrationState`, `SweepConfig`, `SweepData`, `MonitorConfig`, `MonitorRecord`. `VNADataModel` holds device/cal/config/monitor state, validates config, computes statistics, converts S11 complex → dB. `SweepConfig.update_from_cal_file()` enforces the invariant that the cal file is the single source of truth for freq range and point count. |
+| `view.py` | View (PySide6) | `VNAMainWindow(QMainWindow, Ui_MainWindow)`. Two `pyqtgraph.PlotWidget`s — S11 trace (always visible) and scrolling min-freq time-series (`monitor_plot_widget`, hidden by default). Orange `monitor_button`. Blink animation timer. All display-only; no business logic. |
+| `presenter.py` | Presenter | Mediates Model ↔ View. Five `QThread` workers: `DeviceProbeWorker` (startup detection), `PortCleanupWorker` (kill stale port-holders), `VNAPreviewWorker` (oscilloscope-style live preview, no save), `VNASweepWorker` (full multi-IFBW collection + xlsx export), `VNAMonitorWorker` (indefinite min-freq logging → Dataflux CSV). All cross-thread updates via Qt signals. |
+| `backend_wrapper.py` | Adapter | `GUIVNASweepAdapter` decomposes script 6's `run()` into `start_lifecycle()` / `run_single_ifbw_sweep()` / `save_results()` / `stop_lifecycle()`. `GUIVNAMonitorAdapter` for monitor mode. `probe_device_serial()` for startup. Port cleanup utilities (`find_port_owners`, `kill_port_users`). |
+| `vna_backend.py` | Standalone backend | Extracted `BaseVNASweep` and `ContinuousModeSweep` from script 6, with paths made configurable. Also defines `MonitorRecord`, `export_dataflux_csv()`. |
 | `main_window.py` | Auto-generated | Compiled from `design/main_window.ui` via `pyside6-uic`. Provides `Ui_MainWindow`. |
 | `libreVNA.py` | SCPI wrapper | Functional copy of `scripts/libreVNA.py` for GUI use. |
 | `resources_rc.py` | Auto-generated | Compiled Qt resource bundle (logos, icons, placeholder image). |
@@ -102,6 +115,10 @@ event loop. `cwd` is forced to `gui/` so relative `.cal` / `.yaml` lookups work.
    `IFBW X kHz – Sweep N/M`; pyqtgraph plot updates per sweep.
 4. On completion → `data/YYYYMMDD/gui_sweep_collection_YYYYMMDD_HHMMSS.xlsx` written
    (Summary sheet + per-IFBW detail sheets).
+5. **Monitor Mode** → click orange "Monitor" button; GUI switches to scrolling time-series
+   plot (`monitor_plot_widget`); each sweep logs `(timestamp, min_freq_Hz, min_dB)`. Click
+   "Stop Monitor" → `data/YYYYMMDD/vna_monitor_YYYYMMDD_HHMMSS.csv` written in
+   Dataflux-compatible format (12 metadata lines + column header + data rows).
 
 ## 5. Calibration — Active vs Test
 
@@ -135,6 +152,18 @@ Both copies live in `code/LibreVNA-dev/calibration/` and `code/LibreVNA-dev/gui/
 - **Specialized agents** (`.claude/agents/`): `librevna-python-expert`,
   `rf-data-analyst`, `pyqt6-gui-developer`, plus a top-level `librevna-orchestrator`
   for routing.
+- **Monitor Mode** (added 2026-02-25): `VNAMonitorWorker` runs indefinite streaming sweeps
+  and extracts `min_freq_Hz` per sweep via `np.argmin(s11_db)`. Output is a Dataflux-compatible
+  CSV readable by `8_plot_monitor_data.py`. IFBW ≥ 50 kHz required for heartbeat capture
+  (Nyquist limit). For BPM: bandpass-filter the min-freq time-series (0.8–2.5 Hz window)
+  then apply `scipy.signal.find_peaks` — do not use raw peak count.
+- **Planned — F-01 Log Interval Mode** (`markdown/20260225/planned_feature.md`): Auto/Manual
+  warm-up algorithm to estimate sweep speed before Monitor recording begins. Touch points:
+  `model.py` (add `estimate_log_interval()`), `presenter.py` (warm-up phase in
+  `VNAMonitorWorker`), `view.py` (radio buttons + read-only estimated-sweep-time label),
+  `sweep_config.yaml` (new `log_interval_mode` field). Status: Draft/Planned.
+- **Windows exe packaging**: `auto-py-to-exe` config exists at
+  `markdown/20260226/auto-py-to-exe-config.json`. Output directory: `gui/output/`.
 - **Documented next step**: USB direct protocol implementation (specs already
   summarized in `code/LibreVNA-dev/markdown/20260205/part2-continuous-sweep-implementation.md` §7.11)
   to bypass the GUI/SCPI layer for ~33 Hz sustained sweep rates.
