@@ -67,6 +67,11 @@ uv pip install pyvisa pyvisa-py
 ## References
 
 - `docs/e5063a-migration-spec.md` — the living SPEC for this migration.
+- `docs/E5063A_SCPI_Reference.md` — **consolidated SCPI command reference**
+  (exhaustive, categorized, with syntax/params/usage). The working map when
+  writing any E5063A SCPI. Built from the E5062A Programmer's Guide chunks,
+  cross-checked vs the cheat-sheet + `ena_qt6_suite` constants. ⛔ Do **not**
+  use `9018-07931…pdf` (it is a mislabeled 4155B manual — see that doc's §0).
 - `code/ena_qt6_suite/DEVELOPER_GUIDE.md` — Amp suite's own dev guide
   (connection, SCPI cheat-sheet, new-app tutorial).
 - `references/reports/20260504/E5063A_參考資料/` — collaborator handover
