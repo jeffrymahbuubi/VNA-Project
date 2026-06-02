@@ -41,6 +41,7 @@ ena-dev/
 │   ├── __init__.py
 │   └── <to come: probe_e5063a.py, sweep_*.py, monitor_*.py>
 ├── gui/
+│   ├── qt_mcp_mockup.py    # qt-mcp smoke-test harness (PySide6 + pyqtgraph)
 │   └── <to come: DataFlux-replacement Qt6 app>
 └── data/
     └── <to come: timestamped run outputs (or use ../LibreVNA-dev/data/)>
