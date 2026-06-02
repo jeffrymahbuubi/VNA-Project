@@ -833,15 +833,16 @@ Programmer's Guide):
 
 - `:CALC1:DATA:FDAT?` returning 2×N floats for MLOG (primary, secondary pairs) — **confirmed** (E5062A guide Ch.7 / `docs/E5063A_SCPI_Reference.md` §4).
 - `:SENS1:FREQ:DATA?` returning N floats (Hz) for the stimulus axis — **confirmed** (guide / §4, §6).
-- `:STAT:OPER:NTR` / `:PTR` transition filters + `:EVEN?`/`:COND?` edge-latched poll — **command syntax confirmed** as the documented free-run sweep-completion pattern (guide Appendix B / §6.13, §7).
-- `:STAT:OPER` **bit-4 = "Measuring"** (the exact bit weight) — **still UNCONFIRMED.** The consolidated reference confirms the Operation Status register carries the measuring/averaging/sweep bits but does not yet pin the bit number (§8 detail-insert not filled). Confirm on hardware (or by filling §8 from the guide) before trusting the continuous-mode rate.
+- `:STAT:OPER:NTR` / `:PTR` transition filters + `:EVEN?`/`:COND?` edge-latched poll — **confirmed** as the documented free-run sweep-completion pattern (`docs/E5063A_SCPI_Reference.md` §8.19).
+- `:STAT:OPER` **bit-4 = "Measuring"** (the exact bit weight) — **CONFIRMED 2026-06-02** against the now-complete consolidated reference (`docs/E5063A_SCPI_Reference.md` §8.19 / §7, sourced from the E5062A Programmer's Guide): bit 4 = Measuring (1 during sweep), end-of-sweep = bit-4 1→0; `:STAT:OPER:NTR` preset 0, `:PTR` preset 16432. The bench's `setup_mode_continuous` (`:STAT:OPER:NTR 16` + `:PTR 0` + poll `:STAT:OPER:EVEN?` for the 0x10 latch) exactly matches the documented end-of-sweep negative-transition latch, so the continuous-mode SCPI is correct. **All four §6.7.6 verbs are now verified.** Remaining work is purely a live continuous-mode *run* (the SCPI itself is no longer in doubt).
 
-If the bit-4 assumption turns out wrong on first live-hardware run, the fallback
-for the sync mechanism is the `:STAT:OPER:COND?` edge-detection pattern from
-`bench_e5063a_rates.py` variant E (line ~244) — proven to work, just slower
-than ideal.
+The documented SRQ-driven alternative is `:STAT:OPER:NTR 16` + `:STAT:OPER:ENAB 16`
++ `*SRE 128` then `viWaitOnEvent`; the bench's direct `:EVEN?` polling is a valid
+simpler equivalent (ENAB/`*SRE` are only needed for true SRQ waits). If anything
+still misbehaves on the first live continuous run, the fallback is the
+`:STAT:OPER:COND?` edge-detection pattern from `bench_e5063a_rates.py` variant E.
 
-#### 6.7.7 Status: 🟦 In Progress — script written + syntax-checked 2026-05-28; live-hardware execution deferred (instrument disconnected, operator returned home 2026-05-28 evening). S-12c remains Planned until the run produces both xlsx files.
+#### 6.7.7 Status: 🟦 In Progress — **single mode validated live 2026-06-02** (single-mode xlsx produced; SCPI fully verified incl. bit-4=Measuring). Remaining: a live **continuous-mode** run to produce the second xlsx (SCPI no longer in doubt). S-12c stays Planned until both single + continuous xlsx exist.
 
 ---
 
@@ -993,13 +994,14 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 | S-12a | 60-min stability run at variant B | §6 | ⬜ Planned | — |
 | S-12b | Variant E (continuous + polling) deferred pending SRQ-based sync | §6.5 | ⏸ Deferred | 2026-05-28 |
 | S-12c | Real-world continuous-mode IFBW benchmark mirroring LibreVNA REPORT/20260205/ + REPORT/20260226/ workflow → xlsx output for report | §6.7 / §11 | ⬜ Planned | 2026-05-28 |
-| S-12d | `code/ena-dev/scripts/bench_e5063a_realworld.py` — **single-mode path validated live 2026-06-02** (sub-100 kHz IFBW sweep, clean error queue, byte-compatible xlsx written). Continuous-mode path still unrun (blocked on `:STAT:OPER` bit-4 confirmation, §6.7.6). | §6.7 | 🟦 In Progress | 2026-06-02 |
+| S-12d | `code/ena-dev/scripts/bench_e5063a_realworld.py` — **single-mode path validated live 2026-06-02** (sub-100 kHz IFBW sweep, clean error queue, byte-compatible xlsx written). Continuous-mode SCPI now **unblocked** (bit-4=Measuring confirmed, §6.7.6) but **not yet run on hardware**. Also gained a `--format {ascii,real32,real64}` flag (S-12h). | §6.7 | 🟦 In Progress | 2026-06-02 |
 | S-12g | Sub-100 kHz single-mode IFBW→rate curve at locked cal (200–250 MHz/801 pt/S11, REAL32): 100/75/50/40/30 kHz = 28.36/26.03/22.67/21.42/18.54 Hz. **>20 Hz for IFBW ≳ 40 kHz; empirical 20 Hz crossover ≈ 35 kHz.** Recommended sub-100 kHz point: 50 kHz @ 22.7 Hz. Data: `data/20260602/single_sweep_test_e5063a_20260602_114115.xlsx`. | §6.7 | ✅ Validated | 2026-06-02 |
+| S-12h | `--format {ascii,real32,real64}` flag added to `bench_e5063a_realworld.py` (default real32). Measured real32 vs real64 single-mode: **real64 costs ~2–5 ms/sweep (~4–13%, worst at high IFBW) for no usable S11 dB-mag accuracy gain** (USBTMC/host-overhead-bound, not USB-bandwidth-bound). real32 confirmed as the right default. Data: `single_sweep_test_e5063a_{real32,real64}_20260602_1151*.xlsx`. | §6.7 | ✅ Validated | 2026-06-02 |
 | S-12e | LibreVNA `REPORT/20260205/` PDF + xlsx schema reverse-engineered (Single + Continuous modes, 7 IFBW values, 4 metrics, multi-sheet xlsx with Configuration/Timing/S11 Traces/Metrics blocks) | §6.7 | ✅ Validated | 2026-05-28 |
 | S-12f | Phase 3 re-confirm run 15:44 — variants A–D all in expected range, A had "Query INTERRUPTED" residual. 14:43 numbers remain canonical. | §6.6.1 | ✅ Validated | 2026-05-28 |
 | S-13 | CSV format byte-compatible with `8_plot_monitor_data.py` | §7 | ⬜ Planned | — |
 | S-14 | Calibration strategy beyond default — deferred until needed | §8 | ⏸ Deferred | 2026-05-28 |
-| S-15 | SCPI verbs used by `bench_e5063a_realworld.py` verified against corrected ground truth (E5062A Programmer's Guide `20260602/` + `docs/E5063A_SCPI_Reference.md`; the old `9018-07931…pdf` is a mislabeled 4155B manual — see §6.7.6). FDAT 2×N MLOG, FREQ:DATA, and NTR/PTR/EVEN syntax **confirmed**; `:STAT:OPER` bit-4=Measuring weight **still needs hardware confirmation**. | §6.7.6 | 🟦 Partial | 2026-06-02 |
+| S-15 | SCPI verbs used by `bench_e5063a_realworld.py` verified against corrected ground truth (E5062A Programmer's Guide `20260602/` + complete `docs/E5063A_SCPI_Reference.md` §8; the old `9018-07931…pdf` is a mislabeled 4155B manual — see §6.7.6). **All four verbs confirmed:** FDAT 2×N MLOG, FREQ:DATA, NTR/PTR/EVEN syntax, and `:STAT:OPER` bit-4=Measuring (§8.19: bit 4 = Measuring, end-of-sweep = 1→0, NTR preset 0 / PTR preset 16432). | §6.7.6 | ✅ Validated | 2026-06-02 |
 
 ---
 
@@ -1029,3 +1031,4 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 | 2026-06-02 | **First live run of `bench_e5063a_realworld.py` (single mode).** Sub-100 kHz IFBW sweep at the locked cal: 100/75/50/40/30 kHz = 28.36/26.03/22.67/21.42/18.54 Hz, clean error queue, byte-compatible xlsx written to `data/20260602/`. Confirms the prediction that single-mode clears 20 Hz for IFBW ≳ 40 kHz (empirical crossover ≈ 35 kHz; cycle model `25 + 869/IFBW(kHz)`). S-12d single-mode validated; new S-12g added. Continuous-mode path still pending bit-4 confirmation. Memory `project-e5063a-phase3-bench-results` updated. | Claude (with Aunuun) |
 | 2026-06-02 | **Deleted the bogus 4155B files** (19 total): `code/ena-dev/scpi_ch4_test.txt`; `9018-07931_E5063A_SCPI_Command_Reference.pdf` in both `20260504/.../official_docs/` and `20260528/`; and the 16 `Extracted pages from 9018-07931…_*.pdf` chunks in `20260528/`. Genuine E5063A docs (data sheet, operation manual, brochure, config guide, PCB overview, help CHM, speed-screenshot PNG) left intact. Updated `20260504/.../official_docs/README_官方文件下載說明.md` to mark the entry removed (kept the download-provenance record + 4155B finding). Doc/memory warnings updated from "ignore copies" to "deleted." | Claude (with Aunuun) |
 | 2026-06-02 | Added `--format {ascii,real32,real64}` flag to `bench_e5063a_realworld.py` (default real32, backward-compatible; real64 → `:FORM:DATA REAL` + datatype `"d"`; output filename now embeds the format). Measured real32 vs real64 single-mode at the locked cal: **real64 costs ~2–5 ms/sweep (~4–13% rate hit, largest at high IFBW) for no usable S11 dB-mag accuracy gain** — the extra bytes are USBTMC/host-overhead-bound (~1–2 MB/s effective), not USB-bandwidth-bound. real32 stays the recommended default; with real64 the 20 Hz crossover shifts to ~38–40 kHz. Data: `data/20260602/single_sweep_test_e5063a_{real32,real64}_*.xlsx`. Memory `project-e5063a-phase3-bench-results` updated. | Claude (with Aunuun) |
+| 2026-06-02 | **Consolidated SCPI reference `docs/E5063A_SCPI_Reference.md` completed** (1162 lines; §8 per-subsystem detail filled from the E5062A Programmer's Guide). This **closes the last §6.7.6 open item:** §8.19 confirms `:STAT:OPER` **bit 4 = Measuring** (1 during sweep; end-of-sweep = bit-4 1→0; NTR preset 0 / PTR preset 16432) — the bench's `NTR 16 / PTR 0 / poll :EVEN?` continuous-sync exactly matches. All four §6.7.6 verbs now verified; S-15 → ✅ Validated; S-12d continuous-mode SCPI unblocked (only a live continuous run remains). Bogus-PDF ⛔ warnings confirmed intact in the completed reference. | Claude (with Aunuun) |
