@@ -200,10 +200,30 @@ This project has custom Claude Code agents defined in `.claude/agents/`:
 
 When working on tasks related to these domains, Claude Code will automatically suggest using the appropriate specialized agent.
 
-## Next: USB Direct Protocol
+## E5063A Migration (current primary track — `code/ena-dev/`)
 
-Docs (`USB_protocol_v12.pdf`, `Device_protocol_v13.pdf`) have been fully read and summarised in `markdown/20260205/part2-continuous-sweep-implementation.md` §7.11. Key facts:
-- VID `0x1209`, PID `0x4121`; OUT `0x01`, IN data `0x81`
-- Packet frame: `0x5A` + length (2B LE) + type (1B) + payload + CRC32 (4B LE). CRC is always `0x00000000` on VNADatapoint packets — do not validate.
-- `SweepSettings` (type 2) with SO=0 auto-loops indefinitely (~33 Hz path).
-- USB delivers raw receiver data; host must assemble S-params and apply calibration.
+The active direction is migrating the data collector from the LibreVNA to the
+**Keysight E5063A ENA** (USB-TMC via pyvisa). The LibreVNA's ~7 Hz Monitor-mode
+ceiling at 200–250 MHz / 801 pt is too slow for the blood-vessel monitoring
+objective; the E5063A reaches **~26–39 Hz** at the same operating point.
+
+- **Specs (read these first):**
+  - `docs/e5063a-migration-spec.md` — living single-source-of-truth (status table in §12). Instrument validation is essentially done (hardware, SCPI, sweep-rate, cal, data format).
+  - `docs/e5063a-gui-spec.md` — the GUI build plan + status. **GUI is BUILT & live-validated, phases G-0…G-5 ✅** (one-stop Configure / Calibrate / Sanity Check / Continuous Monitor); only G-6 (`.exe` packaging) remains. Lives in `code/ena-dev/gui/`.
+  - `docs/e5063a-gui-ux-spec.md` — **deterministic two-screen UX** (Setup → Acquire): per-widget `objectName` inventory, navigation/state machine, filename rule, control→presenter→backend wiring. Read before coding any view.
+  - `docs/e5063a-gui-design-system.md` — View-layer design tokens + widget factories (`theme.py`); code-built views (drop the compiled `.ui`); `objectName`-on-every-widget rule.
+  - `docs/E5063A_SCPI_Reference.md` — consolidated SCPI ground truth. ⛔ Never cite `9018-07931…pdf` (it's a mislabeled Agilent 4155B manual).
+- **Layout:** `code/ena-dev/` — `scripts/` (`probe_e5063a`, `configure_e5063a`, `calibrate_e5063a`, `bench_e5063a_rates`, `bench_e5063a_realworld`), `gui/` (**built E5063A Data Collector**: entry `e5063a_data_collector.py` + `mvp/` {theme, model, view_setup, view_acquire, view_files, backend_e5063a, stub_backend, controller, dataflux, sanity_xlsx, main_window}; headless check `verify_backend_g2.py`), `data/`, `notebook/`, `ena_dev_paths.py` shim (adds `code/ena_qt6_suite/core/` to path — backend reuse, import don't fork). Run scripts from `code/`: `uv run python ena-dev/scripts/<script>.py`.
+- **GUI (built G-0…G-5):** two-screen PySide6 MVP + a History page. Launch from `code/ena-dev/gui/`: `../../.venv/Scripts/python.exe e5063a_data_collector.py` (or resource `STUB` for offline; `QT_MCP_PROBE=1` for qt-mcp). One ENAConnection on a dedicated QThread (`controller.py`, NF-4). Monitor logs min-S11-freq → Dataflux CSV (`dataflux.py`, byte-compatible w/ `8_plot_monitor_data.py`) at ~39 Hz; Sanity → xlsx (`sanity_xlsx.py`). **Instrument hygiene (important): GUI restores live free-run + clears the panel message (`:DISP:CCL`) on connect/stop/close; ALWAYS stop a run (idle) before closing — killing the host mid-USBTMC-read makes the instrument log −420 "Query UNTERMINATED" (auto-cleared on next connect via `session.clear()`+`*CLS`+`:DISP:CCL`).** Single-sweep trigger path is ~4× slower in-GUI than continuous, so Monitor AND Sanity use the continuous latched path.
+- **Instrument:** E5063A, SN `MY54806798`, FW A.07.06, resource `USB0::0x2A8D::0x5D01::MY54806798::0::INSTR`. Cal = 1-port S11 ECal (Keysight N7550A), now **host-driven** via `calibrate_e5063a.py` (no front panel) **or** recall a saved `.sta` via `configure_e5063a.py`. Locked operating point 200–250 MHz / 801 pt / S11 / −5 dBm, REAL32 + SWAP. **Re-cal only on grid change (start/stop/points); IFBW changes freely.**
+- **SCPI patterns:** single = `:TRIG:SOUR BUS` + `:INIT:IMM`/`:TRIG:SING`/`*OPC?` → `:CALC:DATA:FDAT?` (2×N for MLOG, take every other). Continuous = `:INIT:CONT ON` + latched `:STAT:OPER:EVEN?` bit-4 (Measuring) poll with `:STAT:OPER:NTR 16`/`:PTR 0`. Host ECal = `:SENS1:CORR:COLL:ECAL:SOLT1 1` + `*OPC?` (N7550A self-measures O/S/L, auto-enables), save with `:MMEM:STOR:STYP CST`. **Read traces in binary REAL32 — ASCII `FDAT?` is flaky (−410 Query INTERRUPTED).**
+- **GUI build-verify loop:** qt-mcp ("Playwright for PySide6") — launch with `QT_MCP_PROBE=1`, give widgets stable `setObjectName(...)`. See `docs/qt-mcp-gui-automation.md`. Jupyter for ena-dev notebooks must be launched rooted at `code/` (not `LibreVNA-dev/notebook`).
+
+## Deprioritized: LibreVNA USB Direct Protocol
+
+Was the LibreVNA speed path (~33 Hz, bypasses GUI); superseded by the E5063A
+migration. Revisit only if staying on LibreVNA. Docs in
+`markdown/20260205/part2-continuous-sweep-implementation.md` §7.11: VID `0x1209` /
+PID `0x4121`; frame `0x5A` + 2B len + 1B type + payload + CRC32 (CRC always 0 on
+VNADatapoint — don't validate); `SweepSettings` (type 2) SO=0 auto-loops; host
+assembles S-params + applies cal.

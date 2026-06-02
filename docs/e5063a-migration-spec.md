@@ -131,8 +131,11 @@ code/
 │   ├── __init__.py
 │   ├── ena_dev_paths.py            ← sys.path shim → makes core.* importable
 │   ├── README.md                   ← reuse policy (must-read before adding code)
-│   ├── scripts/__init__.py         (probe, sweep, monitor-mode equivalent will land here)
-│   ├── gui/                        (DataFlux-replacement Qt6 GUI)
+│   ├── scripts/                    (probe_e5063a, configure_e5063a, calibrate_e5063a,
+│   │                                bench_e5063a_rates, bench_e5063a_realworld)
+│   ├── gui/                        (qt_mcp_mockup.py; DataFlux-replacement GUI to be
+│   │                                built — see gui-spec / gui-ux-spec / gui-design-system)
+│   ├── notebook/                   (single-vs-continuous analysis; code/-rooted Jupyter)
 │   └── data/                       (run outputs; may alias to LibreVNA-dev/data/)
 └── .venv/                          ← shared uv environment
 ```
@@ -174,6 +177,14 @@ Three resolution rules when `ena_qt6_suite/core/*.py` gets in the way:
 
 This keeps the migration grounded on validated I/O code while letting us
 ship a GUI shaped to the actual use case.
+
+**Build-verify loop:** the `ena-dev/gui/` work is driven with **qt-mcp**
+(agent-driven Qt inspection — "Playwright for PySide6"). The agent launches the
+GUI with `QT_MCP_PROBE=1`, then reads the widget tree / clicks / screenshots /
+introspects pyqtgraph scenes to confirm wiring without a manual click-through.
+Validated 2026-06-02 against `code/ena-dev/gui/qt_mcp_mockup.py`. Give every
+interactive widget a stable `setObjectName(...)` so the agent can find it by
+name. Full guide: `docs/qt-mcp-gui-automation.md`.
 
 ### 3.5 Status: 🟦 In Progress
 
@@ -537,6 +548,37 @@ application that runs on Windows. Feature parity is mandatory; UI improvements
 (file prefix, progress bar, time-aware input) carry over from the LibreVNA
 Monitor Mode work in `code/LibreVNA-dev/gui/`.
 
+#### 5.1.1 Why the E5063A — the log-interval headroom (the *real* objective)
+
+Source: `REPORT/20260226/20260205.pdf` (Jeffry's 2026-02-26 presentation on the
+LibreVNA "Data Collector" GUI), parsed 2026-06-02. The end goal of this whole
+migration is **Continuous / Monitor mode**: the tool logs, over time, the
+**per-sweep minimum-S11 frequency** (Hz) and its magnitude (dB) — a Dataflux-style
+scalar time series — to monitor a research-institute **blood-vessel prototype** for
+continuous monitoring / early detection.
+
+The monitoring sample rate is **hard-floored by the mean sweep time**:
+`log_interval_ms` cannot be faster than one sweep (you can't log a fresh min-freq
+before a new sweep completes). So **monitor-rate ceiling = 1 / mean sweep time.**
+At the locked 200–250 MHz / 801-pt operating point this is exactly where the E5063A
+pays off, because its sweep is ~4–6× faster than the LibreVNA's:
+
+| Instrument / mode (200–250 MHz, 801 pt, S11) | Mean sweep | Min log-interval | Monitor ceiling | 60 s points |
+|---|---|---|---|---|
+| LibreVNA (report figure) | ~140 ms | ~140 ms | **~7 Hz** | ~400 |
+| E5063A single, 50 kHz IFBW | 42.4 ms | 42 ms | ~23.6 Hz | ~1,415 |
+| E5063A single, 300 kHz IFBW | 30.3 ms | 30 ms | ~33.0 Hz | ~1,980 |
+| E5063A continuous, 50 kHz IFBW | 38.1 ms | 38 ms | ~26.2 Hz | ~1,575 |
+| E5063A continuous, 300 kHz IFBW | 25.4 ms | 25 ms | **~39.3 Hz** | ~2,360 |
+
+**Result: the E5063A lifts the Monitor-mode ceiling from ~7 Hz to ~26–39 Hz — a
+~3.7–5.8× improvement at the same range/points/cal**, moving cardiovascular/pulse
+monitoring from "barely Nyquist" to comfortable oversampling. The recommended Monitor
+operating point is **IFBW ≥ 50 kHz** (keeps ≥20 Hz logging *and* ample dynamic range
+for the resonant notch). Empirical sweep-time data: `code/ena-dev/data/20260602/`
+(both `single_*` and `continuous_*` `..._124432.xlsx`); cross-mode analysis notebook:
+`code/ena-dev/notebook/1_single_vs_continuous_sweep_e5063a.ipynb`.
+
 ### 5.2 Functional requirements (from collaborator handover §4.3–§4.4)
 
 | ID | Requirement | Source |
@@ -573,7 +615,15 @@ Monitor Mode work in `code/LibreVNA-dev/gui/`.
 - Persist runs to `code/LibreVNA-dev/data/YYYYMMDD/` (single data root for the
   whole repo) under filenames `e5063a_monitor_YYYYMMDD_HHMMSS.csv`.
 
-### 5.5 Status: ⬜ Planned
+> **The detailed implementation plan for this phase lives in its own document:
+> [`docs/e5063a-gui-spec.md`](./e5063a-gui-spec.md)** — port-vs-replace file map,
+> backend-swap design, Monitor-mode UI, threading model, qt-mcp verify loop, and a
+> phased build plan with its own status table. This migration spec remains the
+> *validated foundation* (hardware, SCPI, sweep-rate, cal, data format) that the GUI
+> spec builds on. Requirements F-1…F-10 / NF-1…NF-5 above are the contract the GUI
+> spec implements.
+
+### 5.5 Status: ✅ Validated — **GUI built (G-0…G-5)** in `code/ena-dev/gui/`, live-validated against the instrument. Details + phase status in `docs/e5063a-gui-spec.md`. Only G-6 (`.exe` packaging) remains.
 
 ---
 
@@ -842,7 +892,38 @@ simpler equivalent (ENAB/`*SRE` are only needed for true SRQ waits). If anything
 still misbehaves on the first live continuous run, the fallback is the
 `:STAT:OPER:COND?` edge-detection pattern from `bench_e5063a_rates.py` variant E.
 
-#### 6.7.7 Status: 🟦 In Progress — **single mode validated live 2026-06-02** (single-mode xlsx produced; SCPI fully verified incl. bit-4=Measuring). Remaining: a live **continuous-mode** run to produce the second xlsx (SCPI no longer in doubt). S-12c stays Planned until both single + continuous xlsx exist.
+#### 6.7.7 Status: ✅ Validated — **both single + continuous modes validated live 2026-06-02.**
+
+Continuous-mode run executed on hardware (E5063A `MY54806798`, A.07.06, cal
+active, 200–250 MHz / 801 pt / S11 / −5 dBm, REAL32). Full 8-value IFBW set ×
+30 sweeps, clean error queue on every IFBW, latched `:STAT:OPER:EVEN?` bit-4
+sync worked first time (no fallback to the variant-E `:COND?` pattern needed).
+Output: `data/20260602/continuous_sweep_test_e5063a_real32_20260602_121928.xlsx`.
+
+**Continuous-mode IFBW → rate curve** (mean of 30 sweeps each):
+
+| IFBW (kHz) | 300 | 150 | 125 | 100 | 75 | 50 | 10 | 1 |
+|------------|-----|-----|-----|-----|----|----|----|---|
+| Rate (Hz)  | 39.54 | 35.75 | 35.78 | 32.81 | 29.66 | 26.24 | 10.04 | 1.26 |
+| Mean (ms)  | 25.29 | 27.97 | 27.95 | 30.48 | 33.72 | 38.10 | 99.64 | 791.68 |
+
+Noise floor −1.64 dB and trace jitter ≤ 0.004 dB across all IFBW (identical to
+single mode — continuous polling does not degrade trace quality).
+
+**Single vs continuous (apples-to-apples, REAL32, overlapping IFBW from S-12g):**
+
+| IFBW (kHz) | Single (Hz) | Continuous (Hz) | Gain |
+|------------|-------------|-----------------|------|
+| 100 | 28.55 | 32.81 | +15% |
+| 75  | 26.10 | 29.66 | +14% |
+| 50  | 23.02 | 26.24 | +14% |
+
+Continuous mode buys a **steady ~14–15% rate gain** in the overlap region
+(~+25% at the 300 kHz head vs Phase-3 single Variant B's 31.71 Hz). This is the
+expected **modest** improvement — nothing like LibreVNA's 3–5× single→continuous
+jump, because the E5063A single path is already host-paced and efficient. The
+≥30 Hz operating point is now reachable in continuous mode down to ~100 kHz IFBW
+(32.8 Hz), vs single mode topping out at ~28.5 Hz @ 100 kHz.
 
 ---
 
@@ -883,6 +964,24 @@ recall it via `:MMEM:LOAD:STAT "myCal_200M_250M_801pt.sta"`.
 
 Full workflow in §4A.5. Manual SOLT (§4A.2) is the fallback if the N7550A
 is unavailable.
+
+**✅ Host-driven ECal validated 2026-06-02 (S-18).** The front-panel step is
+**no longer required** — `code/ena-dev/scripts/calibrate_e5063a.py` performs the
+full 1-port S11 ECal from the host over USBTMC: set geometry → detect module
+(`:SENS1:CORR:COLL:ECAL:PATH? 1` = `+1`) → `:SENS1:CORR:COLL:ECAL:SOLT1 1` +
+`*OPC?` (module self-measures O/S/L, computes, auto-enables) → verify
+`:CORR:STAT?`/`:CORR:TYPE1?` → confidence sweep → save a grid-named `.sta`
+(`:MMEM:STOR:STYP CST`). Ran 14/14 OK on `MY54806798`, and the saved
+`D:\cal_S11_200-250MHz_801pt.sta` round-trips through `configure_e5063a.py`
+(16/16 OK). This makes the GUI a true **one-stop Configure + Calibrate + Sanity
+Check + Continuous Measure** tool — the dynamic-experiment workflow the
+collaborator asked for (change grid → re-cal from host, all in-app).
+
+> **Re-cal trigger clarification (important for the dynamic workflow):** changing
+> **IFBW does NOT require a re-cal** (§4A.6 — it only shifts the noise floor).
+> Only **frequency-grid changes (start/stop/points/sweep-type)** force a re-cal.
+> So during experimentation IFBW is a free runtime knob; ECal only needs to fire
+> when start/stop/points change.
 
 ### 8.2 Future automation options (still on the table)
 
@@ -933,10 +1032,13 @@ is unavailable.
 
 - `docs/project-overview.md` — LibreVNA project narrative (canonical companion).
 - `CLAUDE.md` — repo rules, sweep-rate table, libreVNA.py contract.
+- `docs/e5063a-gui-spec.md` — GUI build plan (port LibreVNA MVP, swap backend; G-0…G-6).
+- `docs/e5063a-gui-ux-spec.md` — deterministic two-screen UX (Setup → Acquire): widget objectNames, state machine, filename rule, wiring.
+- `docs/e5063a-gui-design-system.md` — View-layer tokens + factories (`theme.py`); code-built views.
 - `code/LibreVNA-dev/markdown/20260205/part2-continuous-sweep-implementation.md` — LibreVNA rate analysis.
-- `code/LibreVNA-dev/gui/mvp/` — MVP architecture template.
+- `code/LibreVNA-dev/gui/mvp/` — MVP architecture template (model dataclasses, presenter/worker pattern).
 - `code/LibreVNA-dev/scripts/8_plot_monitor_data.py` — Monitor Mode CSV consumer (target format for §7).
-- `code/ena-dev/scripts/` — project-owned scripts: `probe_e5063a.py`, `configure_e5063a.py`, `bench_e5063a_rates.py`.
+- `code/ena-dev/scripts/` — project-owned scripts: `probe_e5063a.py`, `configure_e5063a.py`, `calibrate_e5063a.py` (host ECal, S-18), `bench_e5063a_rates.py`, `bench_e5063a_realworld.py`.
 
 ### External LibreVNA report artifacts (outside `code/`, in `REPORT/`)
 
@@ -988,20 +1090,24 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 | S-9e | Operator runs ECal on E5063A, saves cal as `D:\State03.sta` (host copy at `references/reports/20260528/myCal_200M_250M_801pt.sta`) | §4A.5 | ✅ Validated | 2026-05-28 |
 | S-11a | `code/ena-dev/scripts/configure_e5063a.py` written and runs clean (16/16 OK) — recalls cal, pins locked operating point, sets binary REAL32 + SWAP | §4A | ✅ Validated | 2026-05-28 |
 | S-11b | `configure_e5063a.py` accepts both host paths (auto-upload via `:MMEM:TRAN`) and instrument-side paths. Validated 17/17 OK end-to-end. | §4A | ✅ Validated | 2026-05-28 |
-| S-10 | DataFlux-equivalent GUI scoped & wireframed (own GUI in `ena-dev/gui/`) | §5 | ⬜ Planned | — |
-| S-11 | DataFlux-equivalent GUI implemented | §5 | ⬜ Planned | — |
+| S-10 | DataFlux-equivalent GUI scoped & wireframed (own GUI in `ena-dev/gui/`) — detailed plan + UX in `docs/e5063a-gui-spec.md` + `docs/e5063a-gui-ux-spec.md` | §5 / GUI-spec | ✅ Validated | 2026-06-02 |
+| S-11 | **DataFlux-equivalent GUI implemented (`code/ena-dev/gui/`) — phases G-0…G-5 ✅ live-validated:** Configure + host ECal + Sanity Check + Continuous Monitor + History; Dataflux CSV byte-compatible with `8_plot_monitor_data.py`; Monitor sustained 39.1 Hz (drift +0.32% over 120 s). Only G-6 (`.exe`) remains. Full status in `docs/e5063a-gui-spec.md`. | §5 / GUI-spec | ✅ Validated | 2026-06-02 |
 | S-12 | ≥ 30 Hz mean validated on E5063A — measured **32.70 Hz** at variant B (300 kHz IFBW, REAL32 binary). All single-sweep variants A–D in expected range, zero SCPI errors. | §6.5 | ✅ Validated | 2026-05-28 |
 | S-12a | 60-min stability run at variant B | §6 | ⬜ Planned | — |
 | S-12b | Variant E (continuous + polling) deferred pending SRQ-based sync | §6.5 | ⏸ Deferred | 2026-05-28 |
-| S-12c | Real-world continuous-mode IFBW benchmark mirroring LibreVNA REPORT/20260205/ + REPORT/20260226/ workflow → xlsx output for report | §6.7 / §11 | ⬜ Planned | 2026-05-28 |
-| S-12d | `code/ena-dev/scripts/bench_e5063a_realworld.py` — **single-mode path validated live 2026-06-02** (sub-100 kHz IFBW sweep, clean error queue, byte-compatible xlsx written). Continuous-mode SCPI now **unblocked** (bit-4=Measuring confirmed, §6.7.6) but **not yet run on hardware**. Also gained a `--format {ascii,real32,real64}` flag (S-12h). | §6.7 | 🟦 In Progress | 2026-06-02 |
+| S-12c | Real-world continuous-mode IFBW benchmark mirroring LibreVNA REPORT/20260205/ + REPORT/20260226/ workflow → xlsx output for report. **Done: full 8-IFBW × 30-sweep continuous run executed live 2026-06-02, byte-compatible xlsx written (`data/20260602/continuous_sweep_test_e5063a_real32_20260602_121928.xlsx`), clean error queue all IFBW. Continuous = 39.54 Hz @ 300 kHz down to 1.26 Hz @ 1 kHz; ~+14–15% over single in the overlap region (§6.7.7).** | §6.7 / §11 | ✅ Validated | 2026-06-02 |
+| S-12d | `code/ena-dev/scripts/bench_e5063a_realworld.py` — **both single + continuous paths validated live 2026-06-02.** Single-mode sub-100 kHz curve + continuous-mode full 8-IFBW × 30-sweep run both produced byte-compatible xlsx with clean error queues; latched `:STAT:OPER:EVEN?` bit-4 sync worked first time (no variant-E fallback needed). Carries a `--format {ascii,real32,real64}` flag (S-12h). | §6.7 | ✅ Validated | 2026-06-02 |
 | S-12g | Sub-100 kHz single-mode IFBW→rate curve at locked cal (200–250 MHz/801 pt/S11, REAL32): 100/75/50/40/30 kHz = 28.36/26.03/22.67/21.42/18.54 Hz. **>20 Hz for IFBW ≳ 40 kHz; empirical 20 Hz crossover ≈ 35 kHz.** Recommended sub-100 kHz point: 50 kHz @ 22.7 Hz. Data: `data/20260602/single_sweep_test_e5063a_20260602_114115.xlsx`. | §6.7 | ✅ Validated | 2026-06-02 |
 | S-12h | `--format {ascii,real32,real64}` flag added to `bench_e5063a_realworld.py` (default real32). Measured real32 vs real64 single-mode: **real64 costs ~2–5 ms/sweep (~4–13%, worst at high IFBW) for no usable S11 dB-mag accuracy gain** (USBTMC/host-overhead-bound, not USB-bandwidth-bound). real32 confirmed as the right default. Data: `single_sweep_test_e5063a_{real32,real64}_20260602_1151*.xlsx`. | §6.7 | ✅ Validated | 2026-06-02 |
 | S-12e | LibreVNA `REPORT/20260205/` PDF + xlsx schema reverse-engineered (Single + Continuous modes, 7 IFBW values, 4 metrics, multi-sheet xlsx with Configuration/Timing/S11 Traces/Metrics blocks) | §6.7 | ✅ Validated | 2026-05-28 |
+| S-12i | Single-vs-continuous analysis notebook `code/ena-dev/notebook/1_single_vs_continuous_sweep_e5063a.ipynb` built + executed (E5063A counterpart of LibreVNA `3_single_vs_continuous_sweep.ipynb`). Uses a **matched** same-session 8-IFBW × 30-sweep pair (`data/20260602/{single,continuous}_sweep_test_e5063a_real32_20260602_124432.xlsx`). Result: continuous beats single by only **+15–22%** in the 50–300 kHz band (vs LibreVNA's 3.7×) because the E5063A single path has no GUI mediator; **both modes ≥25 Hz for IFBW ≥ 75 kHz, ≥20 Hz for IFBW ≥ 50 kHz**; jitter & noise floor mode-independent. New `ena-dev/notebook/` folder + README (documents the `code/`-rooted Jupyter launch needed for MCP access). | §6.7 / §11 | ✅ Validated | 2026-06-02 |
 | S-12f | Phase 3 re-confirm run 15:44 — variants A–D all in expected range, A had "Query INTERRUPTED" residual. 14:43 numbers remain canonical. | §6.6.1 | ✅ Validated | 2026-05-28 |
 | S-13 | CSV format byte-compatible with `8_plot_monitor_data.py` | §7 | ⬜ Planned | — |
 | S-14 | Calibration strategy beyond default — deferred until needed | §8 | ⏸ Deferred | 2026-05-28 |
 | S-15 | SCPI verbs used by `bench_e5063a_realworld.py` verified against corrected ground truth (E5062A Programmer's Guide `20260602/` + complete `docs/E5063A_SCPI_Reference.md` §8; the old `9018-07931…pdf` is a mislabeled 4155B manual — see §6.7.6). **All four verbs confirmed:** FDAT 2×N MLOG, FREQ:DATA, NTR/PTR/EVEN syntax, and `:STAT:OPER` bit-4=Measuring (§8.19: bit 4 = Measuring, end-of-sweep = 1→0, NTR preset 0 / PTR preset 16432). | §6.7.6 | ✅ Validated | 2026-06-02 |
+| S-16 | Monitor-mode **log-interval headroom** quantified from `REPORT/20260226/20260205.pdf` (parsed via netmind): monitor rate is floored by mean sweep time; E5063A lifts the ceiling from LibreVNA's ~7 Hz (140 ms) to **~26–39 Hz** (25–42 ms) at the matched 200–250 MHz/801 pt point = **~3.7–5.8×** more samples for the blood-vessel monitoring objective. Captured in §5.1.1 + memory `project-monitor-loginterval-e5063a`. | §5.1.1 | ✅ Validated | 2026-06-02 |
+| S-17 | Dedicated GUI implementation spec `docs/e5063a-gui-spec.md` created + **executed** (G-0…G-5 built & validated; ux-spec `docs/e5063a-gui-ux-spec.md` + design-system `docs/e5063a-gui-design-system.md` also realized in code). | §5 / GUI-spec | ✅ Validated | 2026-06-02 |
+| S-18 | **Host-driven 1-port (S11) ECal validated live.** `code/ena-dev/scripts/calibrate_e5063a.py` runs the full ECal from the host (`:SENS1:CORR:COLL:ECAL:SOLT1 1` + `*OPC?`, module self-measures O/S/L), verifies correction active + SOLT1, confidence-reads (binary REAL32), and auto-saves a grid-named `.sta` (`:MMEM:STOR:STYP CST`). 14/14 OK on `MY54806798`; saved `D:\cal_S11_200-250MHz_801pt.sta` round-trips through `configure_e5063a.py` (16/16 OK). Confirms configure + calibrate are both host-drivable → GUI can be a one-stop Configure/Calibrate/Sanity/Continuous tool. IFBW change ≠ re-cal (§4A.6); only grid change forces re-cal. | §8 / GUI-spec | ✅ Validated | 2026-06-02 |
 
 ---
 
@@ -1032,3 +1138,9 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 | 2026-06-02 | **Deleted the bogus 4155B files** (19 total): `code/ena-dev/scpi_ch4_test.txt`; `9018-07931_E5063A_SCPI_Command_Reference.pdf` in both `20260504/.../official_docs/` and `20260528/`; and the 16 `Extracted pages from 9018-07931…_*.pdf` chunks in `20260528/`. Genuine E5063A docs (data sheet, operation manual, brochure, config guide, PCB overview, help CHM, speed-screenshot PNG) left intact. Updated `20260504/.../official_docs/README_官方文件下載說明.md` to mark the entry removed (kept the download-provenance record + 4155B finding). Doc/memory warnings updated from "ignore copies" to "deleted." | Claude (with Aunuun) |
 | 2026-06-02 | Added `--format {ascii,real32,real64}` flag to `bench_e5063a_realworld.py` (default real32, backward-compatible; real64 → `:FORM:DATA REAL` + datatype `"d"`; output filename now embeds the format). Measured real32 vs real64 single-mode at the locked cal: **real64 costs ~2–5 ms/sweep (~4–13% rate hit, largest at high IFBW) for no usable S11 dB-mag accuracy gain** — the extra bytes are USBTMC/host-overhead-bound (~1–2 MB/s effective), not USB-bandwidth-bound. real32 stays the recommended default; with real64 the 20 Hz crossover shifts to ~38–40 kHz. Data: `data/20260602/single_sweep_test_e5063a_{real32,real64}_*.xlsx`. Memory `project-e5063a-phase3-bench-results` updated. | Claude (with Aunuun) |
 | 2026-06-02 | **Consolidated SCPI reference `docs/E5063A_SCPI_Reference.md` completed** (1162 lines; §8 per-subsystem detail filled from the E5062A Programmer's Guide). This **closes the last §6.7.6 open item:** §8.19 confirms `:STAT:OPER` **bit 4 = Measuring** (1 during sweep; end-of-sweep = bit-4 1→0; NTR preset 0 / PTR preset 16432) — the bench's `NTR 16 / PTR 0 / poll :EVEN?` continuous-sync exactly matches. All four §6.7.6 verbs now verified; S-15 → ✅ Validated; S-12d continuous-mode SCPI unblocked (only a live continuous run remains). Bogus-PDF ⛔ warnings confirmed intact in the completed reference. | Claude (with Aunuun) |
+| 2026-06-02 | **Single-vs-continuous analysis notebook created (S-12i).** Ran a fresh matched both-mode bench (`bench_e5063a_realworld.py`, no `--modes` → single+continuous, 8 IFBW × 30, `..._124432.xlsx`) so both modes share one session/cal. Built + executed `code/ena-dev/notebook/1_single_vs_continuous_sweep_e5063a.ipynb` via Jupyter MCP (9 cells: timing panels, update-rate bars with 20/25 Hz lines, S11 overlays, jitter, PrettyTable summaries, conclusions) — mirrors LibreVNA `3_single_vs_continuous_sweep.ipynb`. Findings: continuous +15–22% over single (50–300 kHz), both modes ≥25 Hz for IFBW ≥75 kHz / ≥20 Hz for ≥50 kHz, jitter+NF mode-independent, one benign 125 kHz continuous polling outlier (min/max band only). New `ena-dev/notebook/` folder + README documenting the `code/`-rooted Jupyter launch (the documented `LibreVNA-dev/notebook` root can't see `ena-dev/notebook`). | Claude (with Aunuun) |
+| 2026-06-02 | **Live continuous-mode benchmark run — S-12c/S-12d closed.** Ran `bench_e5063a_realworld.py --modes continuous` (full 8-IFBW × 30-sweep) on E5063A `MY54806798` at the locked cal. Latched `:STAT:OPER:EVEN?` bit-4 sync worked first try (no variant-E fallback). Continuous IFBW→rate: 300/150/125/100/75/50/10/1 kHz = 39.54/35.75/35.78/32.81/29.66/26.24/10.04/1.26 Hz; NF −1.64 dB, jitter ≤ 0.004 dB, clean error queue all IFBW. Apples-to-apples vs single (REAL32, overlap): 100/75/50 kHz = +15/+14/+14% — the expected **modest** gain (≈+25% at the 300 kHz head), not LibreVNA's 3–5× single→continuous jump. ≥30 Hz now reachable in continuous mode down to ~100 kHz IFBW. Data: `data/20260602/continuous_sweep_test_e5063a_real32_20260602_121928.xlsx`. §6.7.7 → ✅; S-12c/S-12d → ✅ Validated. Memory `project-e5063a-phase3-bench-results` updated. | Claude (with Aunuun) |
+| 2026-06-02 | **Monitor-mode log-interval analysis + next-session handoff.** Parsed `REPORT/20260226/20260205.pdf` (netmind) → documented the *real objective*: Continuous/Monitor mode logs per-sweep min-S11 frequency for blood-vessel monitoring, and monitor rate is floored by mean sweep time. Added §5.1.1 with the LibreVNA ~7 Hz → E5063A ~26–39 Hz (~3.7–5.8×) table; new rows S-16 (✅) and S-17 (🟦). §5.4/§5.5 now point to the new **`docs/e5063a-gui-spec.md`** (created this session as the next-major-work kickoff: port `LibreVNA-dev/gui/mvp/` → `ena-dev/gui/`, swap SCPI backend for the E5063A `ENAConnection` path). S-10 → 🟦. Memories added/refreshed: `project-monitor-loginterval-e5063a` (new), `project-librevna-overview` (next-work pointer), MEMORY.md index. CLAUDE.md gained an ena-dev section for cold-start context. | Claude (with Aunuun) |
+| 2026-06-02 | **Bugfix: single-sweep left the front-panel preview frozen.** The confidence/trace single sweep sets `:TRIG:SOUR BUS` + `:INIT1:CONT OFF` (Hold); on exit the E5063A stayed in Hold → front-panel live preview froze (user had to run `configure_e5063a.py` after `calibrate_e5063a.py` to recover). Fix: restore live free-run (`:ABOR`/`:TRIG:SOUR INT`/`:INIT1:CONT ON`) — in `calibrate_e5063a.py` BEFORE the `.sta` save (so the saved state is live too) and in `backend_e5063a.py` `restore_live()` (after ECal, on monitor/sanity stop, on close). Verified `:INIT1:CONT?`=1 / `:TRIG:SOUR?`=INT. Memory `project-e5063a-host-calibration` updated. | Claude (with Aunuun) |
+| 2026-06-02 | **Host-driven ECal validated → one-stop GUI scope confirmed (S-18).** In response to collaborator feedback (experiments need fast dynamic re-config + re-cal), evaluated whether configure + calibrate can be driven from the host: **yes, both.** Configure was already proven (`configure_e5063a.py`, S-11a/b). Wrote `code/ena-dev/scripts/calibrate_e5063a.py` (1-port S11 ECal via N7550A: geometry → `:ECAL:SOLT1 1`+`*OPC?` → verify → confidence sweep → grid-named `.sta` save, hot+host copy). Live run 14/14 OK on `MY54806798`; cal `.sta` round-trips through `configure_e5063a.py` (16/16 OK). Fixed a confidence-read bug (ASCII `:CALC:DATA:FDAT?` → `-410 Query INTERRUPTED`; switched to binary REAL32 per the proven bench pattern). §8.1 host-driven note added; new row S-18 (✅). Surfaced the IFBW≠re-cal clarification for the dynamic workflow. Next: GUI now scoped as Configure/Calibrate/Sanity/Continuous one-stop tool. | Claude (with Aunuun) |
+| 2026-06-02 | **GUI BUILT & live-validated — Phase 2 complete (S-10/S-11/S-17 → ✅).** Implemented the E5063A Data Collector under `code/ena-dev/gui/` (PySide6 MVP, two-screen Setup→Acquire + History page) across gui-spec phases **G-0…G-5**, all live-verified against `MY54806798` via qt-mcp: Configure + host ECal + recall, Verify preview, **Continuous Monitor → Dataflux CSV** (byte-compatible w/ `8_plot_monitor_data.py`, **39.1 Hz sustained, drift +0.32%/120 s**), Device Sanity Check → xlsx, History (list/delete/zip), filename composition, sci-notation toggle, stop-by Duration/Query-count/Manual + progress. Backend `E5063ABackend` on a dedicated QThread (NF-4). **Patterns learned (in gui-spec changelog + memory `project-e5063a-gui-ux` / `project-e5063a-host-calibration`):** (1) single-sweep trigger path is ~4× slower in-GUI than continuous → Monitor AND Sanity use the latched continuous read; (2) host kill mid-USBTMC-read → −420; resync on connect with `session.clear()`+`*CLS`+`:DISP:CCL`; the front-panel message is sticky (cleared by `:DISP:CCL`, separate from `:SYST:ERR?`); (3) restore live free-run on stop/close; (4) don't disable buttons on busy (controller serializes — clicks queue). Phase 5.5 → ✅; only gui-spec G-6 (`.exe`) remains. | Claude (with Aunuun) |
