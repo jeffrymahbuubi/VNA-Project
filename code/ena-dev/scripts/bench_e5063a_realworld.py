@@ -54,7 +54,14 @@ Run from ``code/``::
     uv run python ena-dev/scripts/bench_e5063a_realworld.py --modes continuous
     uv run python ena-dev/scripts/bench_e5063a_realworld.py --ifbw 300,50,1
     uv run python ena-dev/scripts/bench_e5063a_realworld.py --n-sweeps 60
+    uv run python ena-dev/scripts/bench_e5063a_realworld.py --format real64
     uv run python ena-dev/scripts/bench_e5063a_realworld.py --no-save
+
+Data format (--format): real32 (REAL32, 4 B/num — default & recommended),
+real64 (:FORM:DATA REAL, 8 B/num), or ascii. Empirically (2026-06-02, single
+mode) real64 costs ~2-5 ms/sweep more than real32 (~4-13% rate hit, largest at
+high IFBW) for no usable accuracy gain on S11 dB-mag — so real32 is the default.
+Output filename embeds the format: ``{mode}_sweep_test_e5063a_{format}_<stamp>.xlsx``.
 """
 
 from __future__ import annotations
@@ -85,6 +92,16 @@ DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
 # Bit 4 of the Keysight ENA Operation Status register = Measuring.
 # When INIT:CONT ON, this bit pulses 1 (sweep in progress) → 0 (sweep done).
 _OPER_MEASURING_BIT = 0x0010
+
+# Data-transfer format → (`:FORM:DATA` token, pyvisa binary datatype).
+# NOTE: on the Keysight ENA the 64-bit token is `REAL` (not "REAL64"); `REAL32`
+# is the 32-bit form; `ASC` is comma-separated text. datatype None = ASCII path.
+#   "f" = IEEE-754 binary32 (4 B), "d" = IEEE-754 binary64 (8 B).
+_FORMAT_MAP: dict[str, tuple[str, str | None]] = {
+    "ascii":  ("ASC",    None),
+    "real32": ("REAL32", "f"),
+    "real64": ("REAL",   "d"),
+}
 
 
 # ----- Result container ----------------------------------------------------
@@ -128,8 +145,14 @@ def setup_common(
     stop_hz: float,
     points: int,
     stim_dbm: float,
+    fmt_token: str = "REAL32",
 ) -> None:
-    """Pin the configuration shared by all variants. Cal must already be on."""
+    """Pin the configuration shared by all variants. Cal must already be on.
+
+    ``fmt_token`` is the ``:FORM:DATA`` argument: ``REAL32`` (32-bit binary),
+    ``REAL`` (64-bit binary), or ``ASC`` (text). ``:FORM:BORD SWAP`` is applied
+    for the binary formats only.
+    """
     ena.write(":ABOR")
     ena.write("*CLS")
     ena.write(":DISP:ENAB OFF")
@@ -141,8 +164,9 @@ def setup_common(
     ena.write(":CALC1:PAR1:DEF S11")
     ena.write(":CALC1:PAR1:SEL")
     ena.write(":CALC1:FORM MLOG")
-    ena.write(":FORM:DATA REAL32")
-    ena.write(":FORM:BORD SWAP")
+    ena.write(f":FORM:DATA {fmt_token}")
+    if fmt_token != "ASC":
+        ena.write(":FORM:BORD SWAP")
     ena.opc_wait()
 
 
@@ -166,11 +190,20 @@ def setup_mode_continuous(ena: ENAConnection) -> None:
     ena.opc_wait()
 
 
-def fetch_freq_axis(ena: ENAConnection, points: int) -> list[float]:
-    """Read the stimulus frequency axis once. Returns N floats (Hz)."""
-    data = ena._session.query_binary_values(  # type: ignore[attr-defined]
-        ":SENS1:FREQ:DATA?", datatype="f", is_big_endian=False
-    )
+def fetch_freq_axis(
+    ena: ENAConnection, points: int, datatype: str | None = "f"
+) -> list[float]:
+    """Read the stimulus frequency axis once. Returns N floats (Hz).
+
+    ``datatype`` is the pyvisa binary datatype (``"f"``=REAL32, ``"d"``=REAL64),
+    or ``None`` to read comma-separated ASCII. Must match the active ``:FORM:DATA``.
+    """
+    if datatype is None:
+        data = ena.query_values(":SENS1:FREQ:DATA?")
+    else:
+        data = ena._session.query_binary_values(  # type: ignore[attr-defined]
+            ":SENS1:FREQ:DATA?", datatype=datatype, is_big_endian=False
+        )
     if len(data) != points:
         raise RuntimeError(
             f"Frequency axis length mismatch: got {len(data)}, expected {points}"
@@ -178,20 +211,27 @@ def fetch_freq_axis(ena: ENAConnection, points: int) -> list[float]:
     return list(data)
 
 
-def read_s11_trace_db(ena: ENAConnection, points: int) -> list[float]:
+def read_s11_trace_db(
+    ena: ENAConnection, points: int, datatype: str | None = "f"
+) -> list[float]:
     """Read the S11 MLOG trace as N magnitudes (dB).
 
-    ``:CALC1:DATA:FDAT?`` returns 2*N floats for scalar formats like MLOG —
-    pairs of ``(magnitude_dB, 0.0)``. We take every-other element.
+    ``:CALC1:DATA:FDAT?`` returns 2*N values for scalar formats like MLOG —
+    pairs of ``(magnitude_dB, 0.0)``. We take every-other element. ``datatype``
+    selects the transfer path (``"f"``=REAL32, ``"d"``=REAL64, ``None``=ASCII)
+    and must match the active ``:FORM:DATA``.
     """
-    raw = ena._session.query_binary_values(  # type: ignore[attr-defined]
-        ":CALC1:DATA:FDAT?", datatype="f", is_big_endian=False
-    )
+    if datatype is None:
+        raw = ena.query_values(":CALC1:DATA:FDAT?")
+    else:
+        raw = ena._session.query_binary_values(  # type: ignore[attr-defined]
+            ":CALC1:DATA:FDAT?", datatype=datatype, is_big_endian=False
+        )
     if len(raw) != 2 * points:
         raise RuntimeError(
             f"FDAT length mismatch: got {len(raw)}, expected {2 * points}"
         )
-    return raw[0::2]
+    return list(raw[0::2])
 
 
 # ----- Benchmark loops -----------------------------------------------------
@@ -205,6 +245,7 @@ def _bench_single_one_ifbw(
     stim_dbm: float,
     avg_count: int,
     freq_axis: list[float],
+    datatype: str | None = "f",
 ) -> IfbwResult:
     """30-sweep run at a single IFBW, single mode."""
     ena.write(f":SENS1:BAND:RES {ifbw_hz:.6E}")
@@ -214,7 +255,7 @@ def _bench_single_one_ifbw(
     ena.write(":INIT1:IMM")
     ena.write(":TRIG:SING")
     ena.opc_wait()
-    read_s11_trace_db(ena, points)
+    read_s11_trace_db(ena, points, datatype)
 
     sweep_times_s: list[float] = []
     s11_traces_db: list[list[float]] = []
@@ -223,7 +264,7 @@ def _bench_single_one_ifbw(
         ena.write(":INIT1:IMM")
         ena.write(":TRIG:SING")
         ena.opc_wait()
-        trace = read_s11_trace_db(ena, points)
+        trace = read_s11_trace_db(ena, points, datatype)
         t1 = time.perf_counter_ns()
         sweep_times_s.append((t1 - t0) / 1e9)
         s11_traces_db.append(trace)
@@ -276,6 +317,7 @@ def _bench_continuous_one_ifbw(
     stim_dbm: float,
     avg_count: int,
     freq_axis: list[float],
+    datatype: str | None = "f",
 ) -> IfbwResult:
     """30-sweep run at a single IFBW, continuous mode (free-run + latched poll)."""
     ena.write(f":SENS1:BAND:RES {ifbw_hz:.6E}")
@@ -290,7 +332,7 @@ def _bench_continuous_one_ifbw(
             f"Timed out waiting for first sweep at IFBW={ifbw_hz:.0f} Hz "
             f"(continuous mode warmup)"
         )
-    read_s11_trace_db(ena, points)
+    read_s11_trace_db(ena, points, datatype)
     # Drain any latched events that fired during the warmup read.
     ena.query(":STAT:OPER:EVEN?")
 
@@ -302,7 +344,7 @@ def _bench_continuous_one_ifbw(
             raise RuntimeError(
                 f"Timed out waiting for sweep #{i + 1} at IFBW={ifbw_hz:.0f} Hz"
             )
-        trace = read_s11_trace_db(ena, points)
+        trace = read_s11_trace_db(ena, points, datatype)
         t_now = time.perf_counter_ns()
         sweep_times_s.append((t_now - t_prev) / 1e9)
         s11_traces_db.append(trace)
@@ -519,6 +561,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Sweeps per IFBW per mode (default: %(default)s)",
     )
     p.add_argument(
+        "--format", choices=sorted(_FORMAT_MAP), default="real32",
+        help="Data-transfer format: real32 (REAL32, 4 B), real64 (REAL, 8 B), "
+             "or ascii. Default: %(default)s",
+    )
+    p.add_argument(
         "--timeout", type=int, default=DEFAULT_TIMEOUT_MS,
         help="VISA timeout in ms (default: %(default)s)",
     )
@@ -545,6 +592,8 @@ def main(argv: list[str] | None = None) -> int:
         print("--ifbw must contain at least one value", file=sys.stderr)
         return 2
 
+    fmt_token, datatype = _FORMAT_MAP[args.format]
+
     print("=" * 90)
     print("E5063A Real-World IFBW Benchmark — mirrors REPORT/20260205 (SPEC §6, S-12c)")
     print("=" * 90)
@@ -552,6 +601,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Modes:      {modes}")
     print(f"IFBW set:   {ifbw_khz_list} kHz")
     print(f"Sweeps/IFBW:{args.n_sweeps}")
+    print(f"Format:     {args.format} (:FORM:DATA {fmt_token})")
     print("Pre-req:    configure_e5063a.py has been run (cal active, 200–250 MHz, 801 pt)")
     print()
 
@@ -587,8 +637,8 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
 
-            setup_common(ena, start_hz, stop_hz, points, stim_dbm)
-            freq_axis = fetch_freq_axis(ena, points)
+            setup_common(ena, start_hz, stop_hz, points, stim_dbm, fmt_token)
+            freq_axis = fetch_freq_axis(ena, points, datatype)
 
             today = datetime.now().strftime("%Y%m%d")
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -608,13 +658,13 @@ def main(argv: list[str] | None = None) -> int:
                             r = _bench_single_one_ifbw(
                                 ena, ifbw_hz, args.n_sweeps,
                                 points, start_hz, stop_hz, stim_dbm,
-                                avg_count, freq_axis,
+                                avg_count, freq_axis, datatype,
                             )
                         else:
                             r = _bench_continuous_one_ifbw(
                                 ena, ifbw_hz, args.n_sweeps,
                                 points, start_hz, stop_hz, stim_dbm,
-                                avg_count, freq_axis,
+                                avg_count, freq_axis, datatype,
                             )
                         elapsed = time.perf_counter() - t_run
                         print(f" done in {elapsed:.1f}s")
@@ -625,7 +675,7 @@ def main(argv: list[str] | None = None) -> int:
 
                     if not args.no_save:
                         out_dir.mkdir(parents=True, exist_ok=True)
-                        fname = f"{mode}_sweep_test_e5063a_{stamp}.xlsx"
+                        fname = f"{mode}_sweep_test_e5063a_{args.format}_{stamp}.xlsx"
                         out_path = out_dir / fname
                         write_mode_xlsx(results, out_path, mode)
                         saved_paths.append(out_path)

@@ -284,6 +284,12 @@ only verifies the SCPI pipe; configuration alignment happens in Phase 2/3.
 Captured 2026-05-28 to anchor Phase 2 design. Same conceptual workflow as
 LibreVNA; the differences are where state lives and which SCPI verbs to use.
 
+> 📖 **Full command reference:** `docs/E5063A_SCPI_Reference.md` is the
+> exhaustive, categorized E5063A SCPI reference (syntax, parameters, ranges,
+> query responses, workflow recipes, status/error maps). Use it as the
+> authoritative working map for every SCPI verb below. (See also the source
+> note in §6.7.6.)
+
 ### 4A.1 Required configuration before any measurement
 
 Both instruments need the same four things set before SOLT calibration AND
@@ -806,20 +812,32 @@ uv run python ena-dev/scripts/bench_e5063a_realworld.py --no-save
 
 #### 6.7.6 SCPI verbs requiring authoritative verification
 
-The script is currently based on Keysight ENA conventions + patterns proven
-in `bench_e5063a_rates.py`. The following SCPI verbs are **not yet verified**
-against the authoritative reference
-`references/reports/20260528/9018-07931_E5063A_SCPI_Command_Reference.pdf`
-(deferred to a follow-up session, tracked as task #7 in the session task
-list):
+> ⛔ **Reference correction (2026-06-02):** an earlier version of this section
+> named `references/reports/20260528/9018-07931_E5063A_SCPI_Command_Reference.pdf`
+> as the "authoritative reference." **That PDF is NOT an E5063A document — it is
+> the Agilent 4155B/4156B Semiconductor Parameter Analyzer SCPI manual,
+> mislabeled.** (Confirmed: its extracted pages `code/ena-dev/scpi_ch4_test.txt`
+> are verbatim 4155B/4156B content.) **All copies were deleted 2026-06-02**
+> (under `20260504/.../official_docs/`, `20260528/`, the extracted-page chunks,
+> and `code/ena-dev/scpi_ch4_test.txt`); do not re-download. The current SCPI
+> ground truth for the E5062A/E5063A family is:
+> - `references/reports/20260602/E5062A_Programmers_Guide_E5061-90042_Part*.pdf` — E5062A/E5061 Programmer's Guide (sibling instrument, shared SCPI tree; Ch.13 full command reference).
+> - `references/reports/20260522/keysight-ena-e5063a-python-automation/` — working PyVISA E5063A control suite (= `code/ena_qt6_suite/`).
+> - `references/reports/20260504/E5063A_參考資料/` — E5063A cheat-sheet + DataFlux notes (**but ignore its `official_docs/9018-07931…pdf`** — same bogus 4155B file).
+> - `docs/E5063A_SCPI_Reference.md` — the consolidated working map built from the three sources above.
 
-- `:STAT:OPER:EVEN?` bit-4 = Measuring (assumed; needs confirmation for the E5063A specifically)
-- `:STAT:OPER:NTR <mask>` / `:STAT:OPER:PTR <mask>` syntax + semantics
-- `:CALC1:DATA:FDAT?` returning 2*N floats for MLOG format (mag, 0 pairs)
-- `:SENS1:FREQ:DATA?` returning N floats (Hz) for the stimulus axis
+The script is based on Keysight ENA conventions + patterns proven in
+`bench_e5063a_rates.py`. Verification status against the corrected ground
+truth above (`docs/E5063A_SCPI_Reference.md`, sourced from the E5062A
+Programmer's Guide):
 
-If any of these turn out wrong on first live-hardware run, the fallback for
-the sync mechanism is the `:STAT:OPER:COND?` edge-detection pattern from
+- `:CALC1:DATA:FDAT?` returning 2×N floats for MLOG (primary, secondary pairs) — **confirmed** (E5062A guide Ch.7 / `docs/E5063A_SCPI_Reference.md` §4).
+- `:SENS1:FREQ:DATA?` returning N floats (Hz) for the stimulus axis — **confirmed** (guide / §4, §6).
+- `:STAT:OPER:NTR` / `:PTR` transition filters + `:EVEN?`/`:COND?` edge-latched poll — **command syntax confirmed** as the documented free-run sweep-completion pattern (guide Appendix B / §6.13, §7).
+- `:STAT:OPER` **bit-4 = "Measuring"** (the exact bit weight) — **still UNCONFIRMED.** The consolidated reference confirms the Operation Status register carries the measuring/averaging/sweep bits but does not yet pin the bit number (§8 detail-insert not filled). Confirm on hardware (or by filling §8 from the guide) before trusting the continuous-mode rate.
+
+If the bit-4 assumption turns out wrong on first live-hardware run, the fallback
+for the sync mechanism is the `:STAT:OPER:COND?` edge-detection pattern from
 `bench_e5063a_rates.py` variant E (line ~244) — proven to work, just slower
 than ideal.
 
@@ -936,11 +954,12 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 - `20260504/E5063A_參考資料/SUMMARY.md` — collaborator handover summary.
 - `20260504/E5063A_參考資料/E5063A_參考資料.md` — connection methods, legacy DataFlux behaviour.
 - `20260504/E5063A_參考資料/E5063A_SCPI常用命令整理.md` — SCPI cheat-sheet.
-- `20260504/E5063A_參考資料/official_docs/9018-07931_E5063A_SCPI_Command_Reference.pdf` — 388-page authoritative SCPI reference.
-- `20260522/keysight-ena-e5063a-python-automation/` — Amp project (third-party PoC sandbox).
+- ⛔ `9018-07931_E5063A_SCPI_Command_Reference.pdf` — **was NOT an E5063A reference; it is the Agilent 4155B/4156B Semiconductor Parameter Analyzer SCPI manual, mislabeled. All copies (in `20260504/.../official_docs/` and `20260528/`, plus extracted-page chunks and `code/ena-dev/scpi_ch4_test.txt`) deleted 2026-06-02.** Do not re-download. See §6.7.6.
+- `20260602/E5062A_Programmers_Guide_E5061-90042_Part*.pdf` — **E5062A/E5061 Programmer's Guide** (P/N E5061-90042, 28 chunks). The real SCPI ground truth for the E5062A/E5063A family (shared SCPI tree; Ch.13 command reference). Consolidated into `docs/E5063A_SCPI_Reference.md`.
+- `20260522/keysight-ena-e5063a-python-automation/` — Amp project (third-party PoC sandbox); working E5063A PyVISA SCPI constants.
 - `20260522/keysight-ena-e5063a-python-automation/DEVELOPER_GUIDE.md` — Amp's own developer guide.
 - `20260522/vna-e5063a/` — Keysight sample programs and IO Libraries Suite installers.
-- `20260528/e5063a-speed-potential-and-ifbw-tradeoff.md` — **primary** speed-potential study (§6 of this SPEC is built on its findings: 300 kHz IFBW, binary REAL32, display off → ~33–35 Hz achievable).
+- `20260528/e5063a-speed-potential-and-ifbw-tradeoff.md` — **primary** speed-potential study (§6 of this SPEC is built on its findings: 300 kHz IFBW, binary REAL32, display off → ~33–35 Hz achievable). *(Speed numbers are sound; they derive from the E5063A data-sheet throughput table, not the bogus 9018-07931 PDF.)*
 
 ---
 
@@ -974,12 +993,13 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 | S-12a | 60-min stability run at variant B | §6 | ⬜ Planned | — |
 | S-12b | Variant E (continuous + polling) deferred pending SRQ-based sync | §6.5 | ⏸ Deferred | 2026-05-28 |
 | S-12c | Real-world continuous-mode IFBW benchmark mirroring LibreVNA REPORT/20260205/ + REPORT/20260226/ workflow → xlsx output for report | §6.7 / §11 | ⬜ Planned | 2026-05-28 |
-| S-12d | `code/ena-dev/scripts/bench_e5063a_realworld.py` written + syntax-checked. Executes 2 modes × 8 IFBW × 30 sweeps, writes byte-compatible xlsx. Pending first live-hardware run. | §6.7 | 🟦 In Progress | 2026-05-28 |
+| S-12d | `code/ena-dev/scripts/bench_e5063a_realworld.py` — **single-mode path validated live 2026-06-02** (sub-100 kHz IFBW sweep, clean error queue, byte-compatible xlsx written). Continuous-mode path still unrun (blocked on `:STAT:OPER` bit-4 confirmation, §6.7.6). | §6.7 | 🟦 In Progress | 2026-06-02 |
+| S-12g | Sub-100 kHz single-mode IFBW→rate curve at locked cal (200–250 MHz/801 pt/S11, REAL32): 100/75/50/40/30 kHz = 28.36/26.03/22.67/21.42/18.54 Hz. **>20 Hz for IFBW ≳ 40 kHz; empirical 20 Hz crossover ≈ 35 kHz.** Recommended sub-100 kHz point: 50 kHz @ 22.7 Hz. Data: `data/20260602/single_sweep_test_e5063a_20260602_114115.xlsx`. | §6.7 | ✅ Validated | 2026-06-02 |
 | S-12e | LibreVNA `REPORT/20260205/` PDF + xlsx schema reverse-engineered (Single + Continuous modes, 7 IFBW values, 4 metrics, multi-sheet xlsx with Configuration/Timing/S11 Traces/Metrics blocks) | §6.7 | ✅ Validated | 2026-05-28 |
 | S-12f | Phase 3 re-confirm run 15:44 — variants A–D all in expected range, A had "Query INTERRUPTED" residual. 14:43 numbers remain canonical. | §6.6.1 | ✅ Validated | 2026-05-28 |
 | S-13 | CSV format byte-compatible with `8_plot_monitor_data.py` | §7 | ⬜ Planned | — |
 | S-14 | Calibration strategy beyond default — deferred until needed | §8 | ⏸ Deferred | 2026-05-28 |
-| S-15 | SCPI verbs used by `bench_e5063a_realworld.py` verified against `references/reports/20260528/9018-07931_E5063A_SCPI_Command_Reference.pdf` (`:STAT:OPER:EVEN?` bit-4, NTR/PTR, `:CALC1:DATA:FDAT?` MLOG return shape, `:SENS1:FREQ:DATA?`) | §6.7.6 | ⬜ Planned | 2026-05-28 |
+| S-15 | SCPI verbs used by `bench_e5063a_realworld.py` verified against corrected ground truth (E5062A Programmer's Guide `20260602/` + `docs/E5063A_SCPI_Reference.md`; the old `9018-07931…pdf` is a mislabeled 4155B manual — see §6.7.6). FDAT 2×N MLOG, FREQ:DATA, and NTR/PTR/EVEN syntax **confirmed**; `:STAT:OPER` bit-4=Measuring weight **still needs hardware confirmation**. | §6.7.6 | 🟦 Partial | 2026-06-02 |
 
 ---
 
@@ -1005,3 +1025,7 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 | 2026-05-28 | `code/ena-dev/scripts/bench_e5063a_realworld.py` written (480 lines, syntax-checked). Implements the design above. Writes two xlsx workbooks per run (`{mode}_sweep_test_e5063a_<stamp>.xlsx`) that are byte-compatible with the LibreVNA REPORT templates. New §6.7 added covering goal/methodology/metrics/schema/CLI/pending-SCPI-verification. S-12d 🟦 (script ready), S-15 ⬜ (SCPI reference cross-check, deferred). | Claude |
 | 2026-05-28 | Phase 3 re-confirm run at 15:44 produced `bench_e5063a_20260528_154404.{json,csv}` with A=21.19, B=31.71, C=18.48, D=1.26 Hz — all variants in expected range, variant A error queue "Query INTERRUPTED" (residual, not a new failure). No new conclusion; 14:43 numbers remain canonical in §6.5. §6.6.1 added. S-12f ✅. | Claude |
 | 2026-05-28 | Real-world benchmark NOT executed in this session — operator ran `bench_e5063a_rates.py` (old Phase 3 script) by mistake, then ran out of time and returned home before retrying with `bench_e5063a_realworld.py`. Live-hardware execution deferred to next session. S-12c remains Planned; SPEC + memories updated for clean handoff. | Claude (with Aunuun) |
+| 2026-06-02 | **Reference-source correction.** Discovered that `9018-07931_E5063A_SCPI_Command_Reference.pdf` (referenced in §6.7.6, §11, S-15) is **not** an E5063A document — it is the Agilent 4155B/4156B Semiconductor Parameter Analyzer SCPI manual, mislabeled (its extract `code/ena-dev/scpi_ch4_test.txt` is verbatim 4155B content). Corrected §6.7.6, §11, and S-15 to point at the real ground truth: `20260602/` E5062A Programmer's Guide (E5061-90042), the `20260522/keysight-ena-e5063a-python-automation` suite, the `20260504/E5063A_參考資料` cheat-sheet (minus its bogus PDF), and `docs/E5063A_SCPI_Reference.md`. Re-assessed the four §6.7.6 verbs against the corrected sources: FDAT 2×N MLOG, FREQ:DATA, and NTR/PTR/EVEN syntax confirmed; `:STAT:OPER` bit-4=Measuring weight still needs hardware confirmation. Same correction applied to `docs/E5063A_SCPI_Reference.md` §0/§9. | Claude (with Aunuun) |
+| 2026-06-02 | **First live run of `bench_e5063a_realworld.py` (single mode).** Sub-100 kHz IFBW sweep at the locked cal: 100/75/50/40/30 kHz = 28.36/26.03/22.67/21.42/18.54 Hz, clean error queue, byte-compatible xlsx written to `data/20260602/`. Confirms the prediction that single-mode clears 20 Hz for IFBW ≳ 40 kHz (empirical crossover ≈ 35 kHz; cycle model `25 + 869/IFBW(kHz)`). S-12d single-mode validated; new S-12g added. Continuous-mode path still pending bit-4 confirmation. Memory `project-e5063a-phase3-bench-results` updated. | Claude (with Aunuun) |
+| 2026-06-02 | **Deleted the bogus 4155B files** (19 total): `code/ena-dev/scpi_ch4_test.txt`; `9018-07931_E5063A_SCPI_Command_Reference.pdf` in both `20260504/.../official_docs/` and `20260528/`; and the 16 `Extracted pages from 9018-07931…_*.pdf` chunks in `20260528/`. Genuine E5063A docs (data sheet, operation manual, brochure, config guide, PCB overview, help CHM, speed-screenshot PNG) left intact. Updated `20260504/.../official_docs/README_官方文件下載說明.md` to mark the entry removed (kept the download-provenance record + 4155B finding). Doc/memory warnings updated from "ignore copies" to "deleted." | Claude (with Aunuun) |
+| 2026-06-02 | Added `--format {ascii,real32,real64}` flag to `bench_e5063a_realworld.py` (default real32, backward-compatible; real64 → `:FORM:DATA REAL` + datatype `"d"`; output filename now embeds the format). Measured real32 vs real64 single-mode at the locked cal: **real64 costs ~2–5 ms/sweep (~4–13% rate hit, largest at high IFBW) for no usable S11 dB-mag accuracy gain** — the extra bytes are USBTMC/host-overhead-bound (~1–2 MB/s effective), not USB-bandwidth-bound. real32 stays the recommended default; with real64 the 20 Hz crossover shifts to ~38–40 kHz. Data: `data/20260602/single_sweep_test_e5063a_{real32,real64}_*.xlsx`. Memory `project-e5063a-phase3-bench-results` updated. | Claude (with Aunuun) |
