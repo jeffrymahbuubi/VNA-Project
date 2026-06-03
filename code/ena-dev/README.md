@@ -50,9 +50,9 @@ ena-dev/
 │   ├── verify_backend_g2.py          # headless backend live-check (no GUI)
 │   ├── qt_mcp_mockup.py              # qt-mcp smoke-test harness
 │   └── mvp/
+│       ├── __init__.py
 │       ├── theme.py                  # design tokens + widget factories (paod_app pattern)
-│       ├── model.py                  # DeviceInfo/CalibrationState/SweepConfig/MonitorConfig/
-│       │                             #   MonitorRecord/AcquisitionMode/FilenameSpec/VNADataModel
+│       ├── model.py                  # dataclasses: DeviceInfo, CalibrationState, SweepConfig, MonitorConfig, MonitorRecord, AcquisitionMode, FilenameSpec, VNADataModel
 │       ├── view_setup.py             # Screen 1: Connect/Configure/Calibrate/Filename/Verify
 │       ├── view_acquire.py           # Screen 2: mode-adaptive Monitor / Sanity panels
 │       ├── view_files.py             # Screen 3: History (list/delete/zip saved runs)
