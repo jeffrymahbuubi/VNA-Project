@@ -13,9 +13,11 @@ Rules:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QFrame, QLabel, QPushButton, QGraphicsDropShadowEffect,
-    QWidget, QHBoxLayout, QProgressBar,
+    QWidget, QHBoxLayout, QProgressBar, QSizePolicy, QComboBox,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor, QPainter, QBrush
@@ -25,19 +27,21 @@ import pyqtgraph as pg
 # COLOR PALETTE  (paod_app dark-instrument palette, D-5)
 # ═══════════════════════════════════════════════════════════
 CLR = {
-    "bg":            "#080e1c",
-    "panel":         "#0d1628",
-    "card":          "#101e36",
-    "card_raised":   "#142342",
-    "card_glow":     "#162848",
-    "input":         "#0f1e38",
-    "plot":          "#090f1e",
+    # Medium-slate surfaces (G-8 visual refresh, D-10): card > bg (visible panels),
+    # input < card (recessed wells). Was near-black (#080e1c…); see design-system §9.2.
+    "bg":            "#121a2b",
+    "panel":         "#18223a",
+    "card":          "#1e2940",
+    "card_raised":   "#25324d",
+    "card_glow":     "#283a5c",
+    "input":         "#161f33",
+    "plot":          "#0e1525",
 
-    "border":        "#1e3460",
-    "border_light":  "#2a4880",
+    "border":        "#34507e",
+    "border_light":  "#44608f",
     "border_accent": "#3b6fd4",
-    "divider":       "#152a50",
-    "grid":          "#162040",
+    "divider":       "#2a3a5c",
+    "grid":          "#1c2a48",
 
     "accent":        "#3b82f6",
     "accent_hover":  "#5096ff",
@@ -59,8 +63,8 @@ CLR = {
     "cyan":          "#06b6d4",
 
     "t1":            "#f0f6ff",   # primary text
-    "t2":            "#8fb4dc",   # secondary
-    "t3":            "#4f7099",   # muted
+    "t2":            "#b3cae6",   # secondary (brightened, G-8 D-11)
+    "t3":            "#6b8bb5",   # muted (brightened, G-8)
     "t4":            "#2d4a6e",   # faint
 
     # E5063A trace colors (replace PAOD's PPG/ECG set)
@@ -100,6 +104,33 @@ TOUCH = {
 }
 
 # ═══════════════════════════════════════════════════════════
+# RESPONSIVE SIZING TOKENS  ("flexbox for Qt" — design-system D-6/§8)
+# Widgets flex between min/max as the window resizes; no single label may
+# dictate the window's minimum width (arbitrary-length text → ElidedLabel).
+# ═══════════════════════════════════════════════════════════
+SIZE = {
+    "label_col_w":    130,   # fixed label column in _labeled() rows
+    "input_min_w":     90,   # spin/line-edit never narrower than this
+    "combo_min_w":     96,   # combo box minimum width
+    "combo_min_chars":  7,   # setMinimumContentsLength → "auto"/"1000" always fit
+    "field_max_w":    560,   # cap a single input so it can't sprawl on a wide window
+    "win_min_w":      880,   # QMainWindow.setMinimumSize floor (NOT the sizeHint)
+    "win_min_h":      600,
+    "glyph":            5,   # legacy border-triangle half-extent (superseded by SVG below)
+    "card_pad":        22,   # card inner horizontal padding (G-9 D-13)
+    "card_pad_v":      18,   # card inner vertical padding
+    "input_radius":     8,   # input/combo border-radius (spin buttons match — G-9 D-14)
+}
+
+# Crisp arrow glyphs (design-system D-7, image variant). Qt QSS won't draw a clean
+# triangle from transparent borders, so we ship tiny SVG carets and reference them by
+# absolute path (works regardless of CWD; spaces in the path are quoted in the QSS).
+_ASSETS = Path(__file__).resolve().parent / "assets"
+_ARROW_DOWN     = (_ASSETS / "down_arrow.svg").as_posix()
+_ARROW_DOWN_DIM = (_ASSETS / "down_arrow_dim.svg").as_posix()
+_ARROW_UP       = (_ASSETS / "up_arrow.svg").as_posix()
+
+# ═══════════════════════════════════════════════════════════
 # GLOBAL STYLESHEET  (built once from tokens, applied at app root)
 # ═══════════════════════════════════════════════════════════
 STYLESHEET = f"""
@@ -107,11 +138,16 @@ STYLESHEET = f"""
     font-family: 'Segoe UI', 'Noto Sans', 'Roboto', sans-serif;
     outline: none;
 }}
+/* No universal background (G-10 D-16): a `QWidget {{ background-color }}` rule painted
+   every layout-only container with the darker window colour, creating "dead-zone" bands
+   inside the lighter cards (IFBW row, Center/Span, connection info, cal status, …). Set
+   the base colour on the window only; bare containers stay transparent so the card colour
+   shows through, and inputs/cards keep their own explicit backgrounds. */
 QWidget {{
-    background-color: {CLR['bg']};
     color: {CLR['t1']};
     font-size: {FONT['body']}px;
 }}
+QMainWindow {{ background-color: {CLR['bg']}; }}
 QLabel {{
     background: transparent;
     border: none;
@@ -135,7 +171,22 @@ QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus {{
     background-color: #111f3a;
 }}
 QSpinBox::up-button, QSpinBox::down-button,
-QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 18px; border: none; }}
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+    width: 18px; background: {CLR['input']}; border-left: 1px solid {CLR['border']};
+}}
+/* round the buttons' outer corners to match the input radius (G-9 D-14) so the square
+   corner + full-height separator no longer break the rounded field corner */
+QSpinBox::up-button, QDoubleSpinBox::up-button {{ border-top-right-radius: {SIZE['input_radius']}px; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{ border-bottom-right-radius: {SIZE['input_radius']}px; }}
+/* click feedback (G-11 D-18): hover lightens, press accents — mirrors combo ::drop-down:pressed */
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{ background: {CLR['border_light']}; }}
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {{ background: {CLR['accent_dim']}; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image: url("{_ARROW_UP}"); width: 10px; height: 10px; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url("{_ARROW_DOWN}"); width: 10px; height: 10px; }}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled,
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{ image: url("{_ARROW_DOWN_DIM}"); }}
 
 QComboBox {{
     background-color: {CLR['input']};
@@ -148,6 +199,15 @@ QComboBox {{
 }}
 QComboBox:focus {{ border: 2px solid {CLR['accent']}; }}
 QComboBox::drop-down {{ border: none; width: 26px; border-left: 1px solid {CLR['border']}; }}
+QComboBox::down-arrow {{ image: url("{_ARROW_DOWN}"); width: 12px; height: 12px; margin-right: 7px; }}
+QComboBox::down-arrow:disabled {{ image: url("{_ARROW_DOWN_DIM}"); }}
+/* open/pressed feedback (G-8 D-12): caret flips ▲ when the popup opens, + a highlight
+   on the drop-down ZONE only. Do NOT add a whole-combo `QComboBox:on {{border}}` rule:
+   a non-editable combo matches :on, and with the background left unspecified Qt fills it
+   from the palette Highlight (accent) → the whole combo went blue. Restyle sub-controls
+   only. */
+QComboBox::drop-down:pressed {{ background: {CLR['accent_dim']}; }}
+QComboBox::down-arrow:on {{ image: url("{_ARROW_UP}"); }}
 QComboBox QAbstractItemView {{
     background-color: {CLR['card_raised']};
     border: 1px solid {CLR['border_light']};
@@ -163,6 +223,8 @@ QCheckBox::indicator {{
 }}
 QCheckBox::indicator:checked {{ background: {CLR['accent']}; border-color: {CLR['accent']}; }}
 QCheckBox::indicator:disabled {{ border-color: {CLR['border']}; background: {CLR['card']}; }}
+/* a locked-ON box (e.g. timestamp-always) must still read as checked, not greyed/empty */
+QCheckBox::indicator:checked:disabled {{ background: {CLR['accent_dim']}; border-color: {CLR['accent_dim']}; }}
 
 QRadioButton {{ color: {CLR['t2']}; spacing: 8px; font-size: {FONT['label']}px; }}
 QRadioButton::indicator {{
@@ -220,21 +282,28 @@ QMessageBox QPushButton:hover {{ background-color: {CLR['accent_hover']}; }}
 # ═══════════════════════════════════════════════════════════
 # FONT / LABEL FACTORIES
 # ═══════════════════════════════════════════════════════════
-def font(size_key="label", bold=False, italic=False) -> QFont:
+def font(size_key="label", bold=False, italic=False, weight=None) -> QFont:
     sz = FONT.get(size_key, size_key) if isinstance(size_key, str) else size_key
-    weight = QFont.Weight.Bold if bold else QFont.Weight.Normal
+    if weight is None:
+        weight = QFont.Weight.Bold if bold else QFont.Weight.Normal
     f = QFont("Segoe UI", sz, weight)
     if italic:
         f.setItalic(True)
     return f
 
 
-def label(text, size_key="label", bold=False, color=None, italic=False) -> QLabel:
+def label(text, size_key="label", bold=False, color=None, italic=False, weight=None) -> QLabel:
     lbl = QLabel(text)
-    lbl.setFont(font(size_key, bold, italic))
+    lbl.setFont(font(size_key, bold, italic, weight))
     c = color or CLR['t1']
     lbl.setStyleSheet(f"color:{c};background:transparent;border:none;padding:0;")
     return lbl
+
+
+def field_label(text, color=None) -> QLabel:
+    """Semibold, brighter row label for form fields (G-8 D-11). DemiBold (600)
+    reads 'live' without the heaviness of full Bold (700)."""
+    return label(text, "label", color=color or CLR['t2'], weight=QFont.Weight.DemiBold)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -537,3 +606,61 @@ def pill_badge(text, bg, text_color="white") -> QLabel:
     lbl.setStyleSheet(f"background:{bg};color:{text_color};border-radius:10px;padding:2px 10px;border:none;")
     lbl.setFixedHeight(20)
     return lbl
+
+
+# ═══════════════════════════════════════════════════════════
+# RESPONSIVE HELPERS  (design-system §8 — "flexbox for Qt")
+# ═══════════════════════════════════════════════════════════
+class ElidedLabel(QLabel):
+    """A QLabel that elides its text to the current width (full text in the
+    tooltip) and keeps minimumWidth == 0, so an arbitrarily long string never
+    widens the layout / window (design-system D-8). Use for save status,
+    filename preview, cal source, IDN — anything of unbounded length."""
+
+    def __init__(self, text="", size_key="small", color=None,
+                 mode=Qt.TextElideMode.ElideMiddle, parent=None):
+        super().__init__(parent)
+        self._full = text or ""
+        self._mode = mode
+        self.setFont(font(size_key))
+        c = color or CLR['t1']
+        self.setStyleSheet(f"color:{c};background:transparent;border:none;padding:0;")
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setToolTip(self._full)
+        self._render()
+
+    def setText(self, text):
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._render()
+
+    def text(self):
+        return self._full
+
+    def _render(self):
+        fm = self.fontMetrics()
+        super().setText(fm.elidedText(self._full, self._mode, max(0, self.width())))
+
+    def resizeEvent(self, e):
+        self._render()
+        super().resizeEvent(e)
+
+
+def field(widget, min_w=None, max_w=None, combo_chars=None):
+    """Apply the responsive value-field size policy (design-system §8.2) to a
+    QSpinBox / QDoubleSpinBox / QLineEdit / QComboBox: Preferred×Fixed, a minimum
+    width so text always fits, an optional maximum so it can't sprawl, and (for
+    combos) a minimum contents length so short items like 'auto' render fully."""
+    widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    widget.setMinimumWidth(min_w if min_w is not None else SIZE['input_min_w'])
+    if max_w is not None:
+        widget.setMaximumWidth(max_w)
+    if isinstance(widget, QComboBox):
+        widget.setMinimumWidth(min_w if min_w is not None else SIZE['combo_min_w'])
+        widget.setMinimumContentsLength(combo_chars or SIZE['combo_min_chars'])
+        try:
+            widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        except Exception:  # noqa: BLE001
+            pass
+    return widget
