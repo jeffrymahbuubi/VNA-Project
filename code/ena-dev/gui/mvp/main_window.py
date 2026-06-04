@@ -14,8 +14,8 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QThread, QTimer, Signal
-from PySide6.QtWidgets import QMainWindow, QStackedWidget, QTableWidgetItem
+from PySide6.QtCore import QThread, QTimer, Signal, QMetaObject, Qt
+from PySide6.QtWidgets import QMainWindow, QStackedWidget, QTableWidgetItem, QFileDialog
 
 from . import theme as T
 from . import dataflux
@@ -55,6 +55,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("E5063A Data Collector")
         self.resize(1080, 800)
+        # Responsive floor (design-system §8.5): a usable minimum, NOT the content
+        # sizeHint — long labels elide (ElidedLabel) instead of forcing the window wider.
+        self.setMinimumSize(T.SIZE['win_min_w'], T.SIZE['win_min_h'])
 
         self.model = VNADataModel()
 
@@ -138,6 +141,7 @@ class MainWindow(QMainWindow):
         s.incModeCheck.toggled.connect(self._refresh_preview)
         s.incGridCheck.toggled.connect(self._refresh_preview)
         s.filesButton.clicked.connect(self._on_open_files)
+        s.saveDirButton.clicked.connect(self._on_browse_savedir)   # G-9: wire folder picker
         s.recallButton.clicked.connect(self._on_recall)
         s.runEcalButton.clicked.connect(self._on_run_ecal)
         s.verifyButton.clicked.connect(self._on_verify)
@@ -202,6 +206,15 @@ class MainWindow(QMainWindow):
         ext = "csv" if m.mode is AcquisitionMode.MONITOR else "xlsx"
         self.setup_page.set_preview(
             m.filename.compose(m.mode, m.config, m.monitor_config, _PREVIEW_STAMP, ext))
+
+    def _on_browse_savedir(self):
+        """G-9: folder picker for the save directory (the button was previously dead).
+        Sets saveDirInput, which `_resolve_data_dir()` reads as the source of truth."""
+        start = self.setup_page.saveDirInput.text().strip() or str(_ENA_DEV)
+        chosen = QFileDialog.getExistingDirectory(self, "Select save directory", start)
+        if chosen:
+            self.setup_page.saveDirInput.setText(chosen)
+            self._refresh_preview()
 
     def _refresh_gate(self):
         self._sync_model(); m = self.model
@@ -540,9 +553,18 @@ class MainWindow(QMainWindow):
 
     # ── shutdown ────────────────────────────────────────────
     def closeEvent(self, event):
+        # Run teardown (stop timers + restore live free-run + close session)
+        # SYNCHRONOUSLY on the controller thread BEFORE quitting it. The old code
+        # emitted reqClose (queued, cross-thread) then immediately quit the thread,
+        # racing the queued doClose → restore_live() was skipped and the instrument
+        # was left in BUS+Hold (frozen front panel). BlockingQueuedConnection waits
+        # for doClose to finish on the controller thread first.
         try:
-            self.reqStopMonitor.emit(); self.reqStopSanity.emit(); self.reqClose.emit()
-            self._thread.quit()
-            self._thread.wait(2000)
+            QMetaObject.invokeMethod(
+                self.controller, "doClose", Qt.ConnectionType.BlockingQueuedConnection)
+        except Exception:  # noqa: BLE001
+            pass
         finally:
+            self._thread.quit()
+            self._thread.wait(3000)
             super().closeEvent(event)

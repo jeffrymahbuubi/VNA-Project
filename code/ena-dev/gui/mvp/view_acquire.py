@@ -60,7 +60,9 @@ class AcquirePage(QWidget):
         # ── Control bar ──
         col.addWidget(self._build_control_bar())
 
-        self.saveStatusLabel = T.label("—", "small", color=T.CLR['t3'])
+        # ElidedLabel (design-system D-8): a long "Saved → <path>" must NOT widen the
+        # window — it elides to the available width with the full path in the tooltip.
+        self.saveStatusLabel = T.ElidedLabel("—", "small", color=T.CLR['t3'])
         self.saveStatusLabel.setObjectName("saveStatusLabel")
         col.addWidget(self.saveStatusLabel)
 
@@ -68,7 +70,8 @@ class AcquirePage(QWidget):
     def _build_monitor_panel(self) -> QWidget:
         c = T.card("monitorPanel")
         v = QVBoxLayout(c)
-        v.setContentsMargins(16, 14, 16, 16); v.setSpacing(10)
+        v.setContentsMargins(T.SIZE['card_pad'], T.SIZE['card_pad_v'],
+                             T.SIZE['card_pad'], T.SIZE['card_pad_v']); v.setSpacing(10)
         v.addWidget(T.section_header("Continuous Monitor — min-S11 frequency", T.CLR['cyan']))
 
         self.monitorPlot = pg.PlotWidget()
@@ -101,6 +104,10 @@ class AcquirePage(QWidget):
         oh.addWidget(T.label("Interval (ms)", "label", color=T.CLR['t2']))
         oh.addWidget(self.logIntervalInput)
         oh.addStretch()
+        # responsive: min width + combo min-contents so "auto" et al. never clip (§8.2)
+        for _w in (self.stopModeSelector, self.durationInput,
+                   self.queryNumberInput, self.logIntervalInput):
+            T.field(_w)
         v.addWidget(opts)
 
         prog = QWidget(); ph = QHBoxLayout(prog)
@@ -130,7 +137,8 @@ class AcquirePage(QWidget):
     def _build_sanity_panel(self) -> QWidget:
         c = T.card("sanityPanel")
         v = QVBoxLayout(c)
-        v.setContentsMargins(16, 14, 16, 16); v.setSpacing(10)
+        v.setContentsMargins(T.SIZE['card_pad'], T.SIZE['card_pad_v'],
+                             T.SIZE['card_pad'], T.SIZE['card_pad_v']); v.setSpacing(10)
         v.addWidget(T.section_header("Device Sanity Check — per-IFBW benchmark", T.CLR['accent']))
 
         self.s11LivePlot = pg.PlotWidget()
@@ -164,7 +172,7 @@ class AcquirePage(QWidget):
     def _build_control_bar(self) -> QWidget:
         c = T.card("controlCard")
         h = QHBoxLayout(c)
-        h.setContentsMargins(16, 12, 16, 12); h.setSpacing(16)
+        h.setContentsMargins(T.SIZE['card_pad'], 12, T.SIZE['card_pad'], 12); h.setSpacing(16)
         self.startButton = T.button("Start Record", min_w=150)
         self.startButton.setObjectName("startButton")
         self.startButton.clicked.connect(self.startClicked)

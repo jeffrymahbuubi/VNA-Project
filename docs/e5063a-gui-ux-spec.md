@@ -129,7 +129,7 @@ A radio/segmented `calSourceSelector` chooses one of two branches.
 | Widget | objectName | Type | Notes |
 |---|---|---|---|
 | Cal file | `calFileInput` | `QComboBox`(editable) | instrument-side `.sta` path; default `D:\cal_S11_200-250MHz_801pt.sta` |
-| Browse host… | `calBrowseButton` | `button_sm()` | pick a host `.sta` → auto-upload (`:MMEM:TRAN`) then recall |
+| ~~Browse host…~~ | ~~`calBrowseButton`~~ | — | **REMOVED (G-9, 2026-06-04):** never wired and redundant — the `calFileInput` dropdown already lists instrument-side `.sta`, and the cal workflow saves `.sta` on the instrument. Host `.sta` upload deemed unnecessary. |
 | Recall | `recallButton` | `button()` | runs `configure_e5063a.configure()` recall path in a QThread |
 
 **Branch B — Run new ECal (`calEcalPanel`):**
@@ -153,10 +153,10 @@ A radio/segmented `calSourceSelector` chooses one of two branches.
 | Experiment label | `experimentLabelInput` | `QLineEdit` | free text e.g. `bloodvessel-t3`; sanitized |
 | Include mode+param | `incModeCheck` | `QCheckBox` | default ✔ (U-4) |
 | Include freq-grid | `incGridCheck` | `QCheckBox` | default ✔ (U-4) |
-| Timestamp (always) | `incTimestampCheck` | `QCheckBox` | checked + **disabled** (always on) |
+| Timestamp (always) | `incTimestampCheck` | `QCheckBox` | checked + **disabled** (always on). **Live-testing fix (2026-06-04, G-7):** disabled reads as a dead/broken placeholder. Keep always-on (U-4) but make the lock **legible** — append " (always)" to the label or set `toolTip("Timestamp is always included in the filename")`, and style the disabled-checked state so it looks intentionally locked, not greyed-out-broken. Decision: keep non-interactive (do **not** make timestamp optional). |
 | Filename preview | `filenamePreviewLabel` | `label()` (mono) | live-updates as fields change (§5) |
 | Save directory | `saveDirInput` | `QLineEdit` | default `code/ena-dev/data/` |
-| Browse… | `saveDirButton` | `button_sm()` | folder picker → `model.save_data_folder` |
+| Browse… | `saveDirButton` | `button_sm()` | folder picker → `model.save_data_folder`. **(G-9 2026-06-04: previously unwired — now wired to `QFileDialog.getExistingDirectory` via presenter `_on_browse_savedir`.)** |
 
 ### 2.6 Verify card (`verifyCard`) — U-5
 | Widget | objectName | Type | Notes |
@@ -189,7 +189,7 @@ Common shell + a mode-specific panel. The mode comes from Screen 1 (`model.mode`
 | Elapsed | `elapsedLabel` | `label()` (timer font) | `HH:MM:SS` since start |
 | Count | `countLabel` | `label()` | monitor: "points logged: N"; sanity: "sweeps: N/total" |
 | Live rate | `rateBadge` | `MetricBadge` | current sweep rate (Hz) |
-| Save status | `saveStatusLabel` | `label()` | "Saved → <path>" after SAVED |
+| Save status | `saveStatusLabel` | `ElidedLabel` (design-system §8.4) | "Saved → <path>" after SAVED. **Live-testing fix (2026-06-04, G-7):** a plain `QLabel` here grew the window 1080→1632 px when the path was long (#6). Must be an `ElidedLabel` (`minimumWidth=0`, `ElideMiddle`, full path in tooltip) so it never raises the layout's minimum width. |
 
 ### 3.2 Monitor panel (`monitorPanel`) — mode = Continuous Monitor
 Backend: `GUIVNAMonitorAdapter` (wraps `bench_e5063a_realworld` continuous + min-freq
@@ -200,7 +200,7 @@ extraction). Emits `(t, min_freq_hz, mag_db)` per sweep.
 | Min-freq scroller | `monitorPlot` | `pg.PlotWidget`+`setup_plot()` | min-S11 frequency (Hz) vs time; primary plot |
 | Duration (s) | `durationInput` | `QDoubleSpinBox` | `monitor_config.duration_s`; 0/checkbox = indefinite |
 | Indefinite | `indefiniteCheck` | `QCheckBox` | when ✔, disables `durationInput` (stop = manual) |
-| Log interval | `logIntervalInput` | `QComboBox` | `monitor_config.log_interval_ms` ("auto" or ms) |
+| Log interval | `logIntervalInput` | `QComboBox`(editable) | `monitor_config.log_interval_ms` ("auto" or ms). **Live-testing fix (2026-06-04, G-7):** rendered "uto" (the "a" of "auto" clipped) — set `setMinimumContentsLength(7)` + `setMinimumWidth(SIZE['combo_min_w'])` (design-system §8.2) so the full text fits. Applies to all editable combos (`ifbwMonitorInput`, `calFileInput`, `stopModeSelector`). |
 | Effective floor | `effIntervalBadge` | `MetricBadge` | warmup-measured min log-interval (1/mean-sweep) |
 | Min-freq now | `minFreqBadge` | `MetricBadge` | latest `freq_hz` |
 | Mag now | `magBadge` | `MetricBadge` | latest `s11_db` |
@@ -275,6 +275,7 @@ Start/Stop/Span/IFBW/Points/Log-Interval) lives **inside** the file per F-9/NF-5
 | `runEcalButton` | `_on_run_ecal` | `CalibrateWorker` → `calibrate_e5063a.calibrate()` | `calibration.*` + new `.sta` path | `calProgressBar`, `calConfLabel`, `calActiveDot`, state→CALIBRATED |
 | `verifyButton` | `_on_verify` | `VNAPreviewWorker` (1 sweep) | latest trace cache | `s11PreviewPlot`, `verifyStatusLabel` |
 | filename fields | `_on_filename_changed` | — | `filename.*` | `filenamePreviewLabel` |
+| `saveDirButton` (G-9) | `_on_browse_savedir` | `QFileDialog.getExistingDirectory` | `model.save_data_folder` | `saveDirInput` text |
 | `proceedButton` | `_on_proceed` | — | — | stack→page1, build `monitorPanel`/`sanityPanel`, state→ARMED |
 | `startButton` (monitor) | `_on_start_monitor` | `GUIVNAMonitorAdapter.start_recording(interval, duration, on_point)` | `is_monitoring=True`, append `MonitorRecord` | `monitorPlot` scroll, badges, `elapsed/countLabel`, state→RUNNING |
 | `startButton` (sanity) | `_on_start_sanity` | `GUIVNASweepAdapter.run_single_ifbw_sweep` loop | append `SweepData` | `s11LivePlot`, `overallProgress`, `metricsTable`, state→RUNNING |
@@ -313,6 +314,31 @@ does today.
 - Backend is a single `E5063ABackend` on a threaded `BackendController` (the §3 GUIVNA*Adapter contract is realized as methods on one backend object rather than separate adapter classes — same seam, less boilerplate).
 - **Sanity + Monitor both use the continuous latched read** (`read_trace_continuous`) — the single-sweep trigger path is ~4× slower in-GUI.
 
+### 8.2 Live-testing findings (2026-06-04) → tracked as gui-spec G-7
+
+Hands-on testing + a qt-mcp live pass against `MY54806798` surfaced six issues (one UX,
+several View-layer, two instrument-hygiene). **All implemented + live-validated 2026-06-04**
+(#1's arrow shipped as crisp SVG carets after the CSS border-triangle rendered as a dash —
+design-system §8.3). Full detail + the responsive fixes live in
+`docs/e5063a-gui-design-system.md` §8 and the gui-spec §6.1/G-7 row. Summary of the
+UX-relevant deltas:
+
+| # | Symptom | Validated | Spec fix |
+|---|---------|-----------|----------|
+| 1 | Combo/spin **drop-down arrow invisible** | screenshot — only a divider, no caret | design-system D-7/§8.3 (token-colored CSS border-triangle carets) |
+| 2 | **Verify freezes the instrument** | live: `TRIG:SOUR INT/CONT 1` → `BUS/CONT 0` (Hold) after pressing Verify | presenter/backend: `verifyButton` path must call `restore_live()` after the single sweep (it currently doesn't) — gui-spec §3 wiring + G-7 |
+| 3 | **"Query UNTERMINATED"** on panel | error **queue was clean** (`+0`); it's the sticky front-panel msg from a prior force-kill mid-read; `:DISP:CCL` on connect clears it | covered by existing connect-resync; G-7 also fixes the close-time race (#7) that can *cause* it |
+| 4 | **Timestamp checkbox** looks broken | `[disabled]` by design (U-4) | §2.5 — keep locked, make legible (label/tooltip/lock styling) |
+| 5 | Interval combo shows **"uto"** | width 85 px, `minimumContentsLength=0` | §3.2 — `setMinimumContentsLength(7)` + min-width |
+| 6 | Long save path **widens the window** (1080→1632 px) | live `qt_list_windows` | §3.1 — `saveStatusLabel` → `ElidedLabel`; design-system §8 responsive convention |
+| 7 | **App-close leaves instrument in Hold** | still `BUS/Hold` after graceful close | `closeEvent` races `reqClose` vs `_thread.quit()`; G-7 — await the queued `doClose`/`restore_live` before quitting the controller thread |
+
+**Responsive sizing (user request):** the broader "flexbox-for-Qt" ask — widgets that flex
+between min/max as the window resizes, no single label dictating window width — is specced
+as design-system **D-6/§8** (a `SIZE` token group + `QSizePolicy` convention + `ElidedLabel`)
+and applies across both screens, not just #5/#6's offenders. Other arbitrary-length labels
+to convert to `ElidedLabel`: `filenamePreviewLabel`, `calSourceLabel`, `idnLabel`.
+
 ---
 
 ## 9. References
@@ -328,3 +354,12 @@ does today.
 |------|--------|-----|
 | 2026-06-02 | Spec created. Two-screen flow locked from user feedback (U-1…U-6): Setup (configure+calibrate+filename+verify) → Acquire (mode-adaptive live collection). Full widget inventories with objectNames, navigation/state machine + gating, filename composition rule, model deltas, deterministic control→presenter→backend wiring table, phase mapping. Feasibility confirmed — wraps existing validated backends. | Claude (with Aunuun) |
 | 2026-06-02 | **Implemented & live-validated (G-0…G-5).** Status → ✅. UX-OQ-1/2/3 resolved; §8.1 "Deviations from the original spec" added (third Files page; stop-mode selector + query-count + progress; sci-notation toggle; single threaded `E5063ABackend` realizing the adapter contract; continuous latched read for both modes). Built in `code/ena-dev/gui/` and verified via qt-mcp against `MY54806798`. | Claude (with Aunuun) |
+| 2026-06-04 | **Live-testing findings → G-7 (§8.2).** User hands-on test + qt-mcp live pass against `MY54806798` validated 6 issues + 1 new (close-time freeze): #1 invisible combo/spin arrows, #2 Verify leaves the instrument in BUS+Hold (no `restore_live` in the verify path — confirmed `INT/CONT1`→`BUS/CONT0`), #3 sticky "Query UNTERMINATED" panel msg (error queue itself clean), #4 timestamp checkbox reads as broken (disabled by design — make legible), #5 interval combo clips "auto"→"uto", #6 long save path grows the window 1080→1632 px, #7 graceful close leaves Hold (closeEvent races `reqClose` vs `_thread.quit()`). Per-widget fixes folded into §2.5/§3.1/§3.2; the responsive "flexbox-for-Qt" convention lives in design-system D-6/§8. | Claude (with Aunuun) |
+| 2026-06-04 | **G-7 implemented + live-validated.** Re-verified via qt-mcp vs `MY54806798`: #5 "auto" fits (combo 85→113 px); #6 long save path holds the window at 1080 px (was 1632); #2 Verify → `INT/CONT 1` (live); #7 close mid-monitor → `INT/CONT 1` + clean error queue (no −420); #4 "timestamp (always)" + tooltip + locked-checked styling; #1 **crisp ▼/▲ via SVG carets** (`mvp/assets/*.svg`) after the CSS border-triangle rendered only as a dash. All G-7 items closed. | Claude (with Aunuun) |
+| 2026-06-04 | **G-8 visual refresh implemented** (two-column config grid, slate palette, semibold labels, combo open-caret) — see design-system §9 / gui-spec §6.1. | Claude (with Aunuun) |
+| 2026-06-04 | **G-9 micro-polish specced (not implemented).** §2.4 `calBrowseButton` "Browse host…" **removed** (dead + redundant); §2.5/§6 `saveDirButton` "Browse…" **wired** to a folder picker (`_on_browse_savedir`). Plus design-system §9.6/D-13…D-15: card padding 16→~22 (#3 text-to-border), spin-button corner radius (#1b), and the validated **0 px Points↔IFBW gap** fix — single `ifbwCell` container instead of overlapping shared cells + grid verticalSpacing 14 (#1a). | Claude (with Aunuun) |
+| 2026-06-04 | **G-9 implemented + qt-mcp-validated.** Browse-host removed; save-dir Browse wired to a `QFileDialog` folder picker; `ifbwCell` QStackedWidget restored Points↔IFBW spacing (0→14 px); rounded spin-button corners; card padding ~22. | Claude (with Aunuun) |
+| 2026-06-04 | **G-10 container dead-zone fix specced (not implemented).** Validated: plain `QWidget` layout-containers (IFBW row, Center/Span, connection IDN/Serial/FW, cal radio + status, filename rows, Acquire rows) render with the darker window `bg` → dark bands + info text tight to the card border. Fix (design-system §9.7/D-16): drop the universal `QWidget` background, set it on `QMainWindow` → containers transparent, card colour shows through; the 22 px card padding gives the spacing. One global change. | Claude (with Aunuun) |
+| 2026-06-04 | **G-10 implemented + qt-mcp-validated.** Global QSS change shipped; Setup cards now uniform (no dark bands behind IFBW/Center-Span/connection-info/cal-status), Files page + window base correct, no regression. | Claude (with Aunuun) |
+| 2026-06-04 | **G-11 specced (not implemented).** Validated: IFBW combo (424 px) wider than Start (345 px) → rebuild `ifbwCell` pages with a grid mirroring the config columns so the monitor combo == col1 width; add spin-button `:hover`/`:pressed` feedback (mirror the combo). Spec design-system §9.8/D-17-D-18. | Claude (with Aunuun) |
+| 2026-06-04 | **G-11 implemented + qt-mcp-validated.** `ifbwCell` pages rebuilt as grids mirroring the config columns (+ col2 spacer) → IFBW combo 424→352 px, right edge aligned with Start; spin `:hover`/`:pressed` QSS added (clean parse). | Claude (with Aunuun) |

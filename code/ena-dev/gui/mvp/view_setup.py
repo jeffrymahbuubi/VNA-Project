@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QScrollArea,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QScrollArea, QStackedWidget,
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QRadioButton,
     QButtonGroup,
 )
@@ -24,7 +24,7 @@ def _labeled(text: str, w: QWidget, label_w: int = 130) -> QWidget:
     h = QHBoxLayout(row)
     h.setContentsMargins(0, 0, 0, 0)
     h.setSpacing(10)
-    lbl = T.label(text, "label", color=T.CLR['t2'])
+    lbl = T.field_label(text, color=T.CLR['t2'])   # semibold + brighter (G-8 D-11)
     lbl.setFixedWidth(label_w)
     h.addWidget(lbl)
     h.addWidget(w, 1)
@@ -35,7 +35,8 @@ def _card_with_header(name: str, header: str):
     """Return (card_frame, inner_vbox) with a section header already added."""
     c = T.card(name)
     v = QVBoxLayout(c)
-    v.setContentsMargins(16, 14, 16, 16)
+    v.setContentsMargins(T.SIZE['card_pad'], T.SIZE['card_pad_v'],
+                         T.SIZE['card_pad'], T.SIZE['card_pad_v'])  # G-9 D-13: breathing room
     v.setSpacing(10)
     v.addWidget(T.section_header(header))
     return c, v
@@ -118,7 +119,7 @@ class SetupPage(QWidget):
 
         info = QGridLayout()
         info.setHorizontalSpacing(10); info.setVerticalSpacing(4)
-        self.idnLabel = T.label("—", "small", color=T.CLR['t2'])
+        self.idnLabel = T.ElidedLabel("—", "small", color=T.CLR['t2'])
         self.idnLabel.setObjectName("idnLabel")
         self.serialLabel = T.label("—", "small", color=T.CLR['t2'])
         self.serialLabel.setObjectName("serialLabel")
@@ -137,59 +138,88 @@ class SetupPage(QWidget):
 
     # ── Configuration ───────────────────────────────────────
     def _build_config_card(self) -> QWidget:
+        """Two-column grid (G-8 D-9): pairs fields side-by-side so a wide/maximized
+        window has no large empty card zone. 4 logical cols: label|field|label|field."""
         c, v = _card_with_header("configCard", "Configuration")
 
-        self.modeSelector = QComboBox()
-        self.modeSelector.setObjectName("modeSelector")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14); grid.setVerticalSpacing(14)  # G-9 D-15: looser rows
+        grid.setColumnStretch(1, 1); grid.setColumnStretch(3, 1)
+
+        def _flabel(text):
+            lbl = T.field_label(text, color=T.CLR['t2'])
+            lbl.setFixedWidth(T.SIZE['label_col_w'])
+            return lbl
+
+        # Mode — spans both field columns
+        self.modeSelector = QComboBox(); self.modeSelector.setObjectName("modeSelector")
         self.modeSelector.addItems(["Continuous Monitor", "Device Sanity Check"])
         self.modeSelector.currentIndexChanged.connect(self._apply_mode_visibility)
-        v.addWidget(_labeled("Mode", self.modeSelector))
+        grid.addWidget(_flabel("Mode"), 0, 0)
+        grid.addWidget(self.modeSelector, 0, 1, 1, 3)
 
-        self.startFreqInput = QDoubleSpinBox()
-        self.startFreqInput.setObjectName("startFreqInput")
+        # Start | Stop
+        self.startFreqInput = QDoubleSpinBox(); self.startFreqInput.setObjectName("startFreqInput")
         self.startFreqInput.setRange(0.1, 18000.0); self.startFreqInput.setDecimals(3)
         self.startFreqInput.setSuffix(" MHz"); self.startFreqInput.setValue(200.0)
-        v.addWidget(_labeled("Start", self.startFreqInput))
-
-        self.stopFreqInput = QDoubleSpinBox()
-        self.stopFreqInput.setObjectName("stopFreqInput")
+        self.stopFreqInput = QDoubleSpinBox(); self.stopFreqInput.setObjectName("stopFreqInput")
         self.stopFreqInput.setRange(0.1, 18000.0); self.stopFreqInput.setDecimals(3)
         self.stopFreqInput.setSuffix(" MHz"); self.stopFreqInput.setValue(250.0)
-        v.addWidget(_labeled("Stop", self.stopFreqInput))
+        grid.addWidget(_flabel("Start"), 1, 0); grid.addWidget(self.startFreqInput, 1, 1)
+        grid.addWidget(_flabel("Stop"), 1, 2); grid.addWidget(self.stopFreqInput, 1, 3)
 
-        self.pointsInput = QSpinBox()
-        self.pointsInput.setObjectName("pointsInput")
+        # Points | Power
+        self.pointsInput = QSpinBox(); self.pointsInput.setObjectName("pointsInput")
         self.pointsInput.setRange(2, 1601); self.pointsInput.setValue(801)
-        v.addWidget(_labeled("Points", self.pointsInput))
-
-        self.powerInput = QDoubleSpinBox()
-        self.powerInput.setObjectName("powerInput")
+        self.powerInput = QDoubleSpinBox(); self.powerInput.setObjectName("powerInput")
         self.powerInput.setRange(-45.0, 10.0); self.powerInput.setDecimals(1)
         self.powerInput.setSuffix(" dBm"); self.powerInput.setValue(-5.0)
-        v.addWidget(_labeled("Power", self.powerInput))
+        grid.addWidget(_flabel("Points"), 2, 0); grid.addWidget(self.pointsInput, 2, 1)
+        grid.addWidget(_flabel("Power"), 2, 2); grid.addWidget(self.powerInput, 2, 3)
 
-        # Monitor-only IFBW
-        self.ifbwMonitorInput = QComboBox()
-        self.ifbwMonitorInput.setObjectName("ifbwMonitorInput")
+        # IFBW row — a QStackedWidget cell swaps the monitor vs sanity controls so NO two
+        # widgets share a grid cell. Overlapping shared cells previously collapsed this
+        # row's spacing to 0 px (Points touched IFBW — G-9 #1a). Spans all 4 columns; each
+        # page carries its own left label aligned to the label-column width.
+        self.ifbwMonitorInput = QComboBox(); self.ifbwMonitorInput.setObjectName("ifbwMonitorInput")
         self.ifbwMonitorInput.setEditable(True)
         self.ifbwMonitorInput.addItems(["300", "150", "100", "75", "50", "30", "10", "1"])
         self.ifbwMonitorInput.setCurrentText("300")
-        self._rowIfbwMonitor = _labeled("IFBW (kHz)", self.ifbwMonitorInput)
-        v.addWidget(self._rowIfbwMonitor)
-
-        # Sanity-only IFBW list + sweeps
-        self.ifbwListInput = QLineEdit("300,150,100,50")
-        self.ifbwListInput.setObjectName("ifbwListInput")
-        self._rowIfbwList = _labeled("IFBW set (kHz)", self.ifbwListInput)
-        v.addWidget(self._rowIfbwList)
-
-        self.numSweepsInput = QSpinBox()
-        self.numSweepsInput.setObjectName("numSweepsInput")
+        self.ifbwListInput = QLineEdit("300,150,100,50"); self.ifbwListInput.setObjectName("ifbwListInput")
+        self.numSweepsInput = QSpinBox(); self.numSweepsInput.setObjectName("numSweepsInput")
         self.numSweepsInput.setRange(1, 100000); self.numSweepsInput.setValue(30)
-        self._rowNumSweeps = _labeled("Sweeps / IFBW", self.numSweepsInput)
-        v.addWidget(self._rowNumSweeps)
 
-        # Derived
+        # Each page mirrors the parent config grid's 4-column structure (same spacing +
+        # stretches + 130 px label columns) so the monitor combo lands at exactly the
+        # col1 (Start/Stop) width instead of being over-wide (G-11 D-17).
+        _monPage = QWidget()
+        _mg = QGridLayout(_monPage); _mg.setContentsMargins(0, 0, 0, 0)
+        _mg.setHorizontalSpacing(14); _mg.setVerticalSpacing(0)
+        _mg.setColumnStretch(1, 1); _mg.setColumnStretch(3, 1)
+        _mg.addWidget(_flabel("IFBW (kHz)"), 0, 0)
+        _mg.addWidget(self.ifbwMonitorInput, 0, 1)
+        # a REAL fixed-width spacer in col2 (not just setColumnMinimumWidth) so the grid keeps
+        # the inter-column spacing → col1 width matches the parent grid's col1 exactly (G-11).
+        _ifbwSpacer = QWidget(); _ifbwSpacer.setFixedWidth(T.SIZE['label_col_w'])
+        _mg.addWidget(_ifbwSpacer, 0, 2)
+
+        _sanPage = QWidget()
+        _sg = QGridLayout(_sanPage); _sg.setContentsMargins(0, 0, 0, 0)
+        _sg.setHorizontalSpacing(14); _sg.setVerticalSpacing(0)
+        _sg.setColumnStretch(1, 1); _sg.setColumnStretch(3, 1)
+        _sg.addWidget(_flabel("IFBW set (kHz)"), 0, 0)
+        _sg.addWidget(self.ifbwListInput, 0, 1)
+        _sg.addWidget(_flabel("Sweeps / IFBW"), 0, 2)
+        _sg.addWidget(self.numSweepsInput, 0, 3)
+
+        self.ifbwCell = QStackedWidget(); self.ifbwCell.setObjectName("ifbwCell")
+        self.ifbwCell.addWidget(_monPage)   # index 0 = monitor
+        self.ifbwCell.addWidget(_sanPage)   # index 1 = sanity
+        grid.addWidget(self.ifbwCell, 3, 0, 1, 4)
+
+        v.addLayout(grid)
+
+        # Derived center/span (full width)
         derived = QWidget(); dh = QHBoxLayout(derived)
         dh.setContentsMargins(0, 0, 0, 0); dh.setSpacing(16)
         self.centerLabel = T.label("Center: 225 MHz", "small", color=T.CLR['t3'])
@@ -205,6 +235,15 @@ class SetupPage(QWidget):
         self.calStaleHint.setObjectName("calStaleHint")
         self.calStaleHint.setVisible(False)
         v.addWidget(self.calStaleHint)
+
+        # Responsive policy (design-system §8.2): min width + combo min-contents so
+        # text always fits. NO max_w here — in the two-column grid (G-8 D-9) the columns
+        # already split the width, so fields fill their column (balanced, no dead zone);
+        # capping at field_max_w would leave a gap on a maximized window.
+        for _w in (self.modeSelector, self.startFreqInput, self.stopFreqInput,
+                   self.pointsInput, self.powerInput, self.ifbwMonitorInput,
+                   self.ifbwListInput, self.numSweepsInput):
+            T.field(_w)
         return c
 
     # ── Calibration ─────────────────────────────────────────
@@ -233,12 +272,11 @@ class SetupPage(QWidget):
         self.calFileInput = QComboBox(); self.calFileInput.setObjectName("calFileInput")
         self.calFileInput.setEditable(True)
         self.calFileInput.addItems([r"D:\cal_S11_200-250MHz_801pt.sta", r"D:\State03.sta"])
-        self.calBrowseButton = T.button_sm("Browse host…")
-        self.calBrowseButton.setObjectName("calBrowseButton")
+        # "Browse host…" removed (G-9): dead + redundant — the dropdown above already
+        # lists instrument-side .sta files, and the cal workflow saves .sta on the device.
         self.recallButton = T.button("Recall", min_w=110)
         self.recallButton.setObjectName("recallButton")
         ah.addWidget(self.calFileInput, 1)
-        ah.addWidget(self.calBrowseButton)
         ah.addWidget(self.recallButton)
         v.addWidget(self.calExistingPanel)
 
@@ -268,7 +306,7 @@ class SetupPage(QWidget):
         self.calActiveDot.setObjectName("calActiveDot")
         self.calTypeLabel = T.label("not calibrated", "small", color=T.CLR['t2'])
         self.calTypeLabel.setObjectName("calTypeLabel")
-        self.calSourceLabel = T.label("—", "small", color=T.CLR['t3'])
+        self.calSourceLabel = T.ElidedLabel("—", "small", color=T.CLR['t3'])
         self.calSourceLabel.setObjectName("calSourceLabel")
         self.calConfLabel = T.label("—", "small", color=T.CLR['t3'])
         self.calConfLabel.setObjectName("calConfLabel")
@@ -280,6 +318,9 @@ class SetupPage(QWidget):
         sg.addWidget(self.calConfLabel, 2, 1)
         sg.setColumnStretch(1, 1)
         v.addWidget(status)
+
+        T.field(self.calFileInput, max_w=T.SIZE['field_max_w'])
+        T.field(self.ecalPortInput)
         return c
 
     # ── Filename ────────────────────────────────────────────
@@ -296,15 +337,15 @@ class SetupPage(QWidget):
         self.incModeCheck.setChecked(True)
         self.incGridCheck = QCheckBox("freq grid"); self.incGridCheck.setObjectName("incGridCheck")
         self.incGridCheck.setChecked(True)
-        self.incTimestampCheck = QCheckBox("timestamp"); self.incTimestampCheck.setObjectName("incTimestampCheck")
+        self.incTimestampCheck = QCheckBox("timestamp (always)"); self.incTimestampCheck.setObjectName("incTimestampCheck")
         self.incTimestampCheck.setChecked(True); self.incTimestampCheck.setEnabled(False)
+        self.incTimestampCheck.setToolTip("The timestamp is always included in the filename (locked).")
         ch.addWidget(self.incModeCheck); ch.addWidget(self.incGridCheck)
         ch.addWidget(self.incTimestampCheck); ch.addStretch()
         v.addWidget(checks)
 
-        self.filenamePreviewLabel = T.label("—", "mono", color=T.CLR['cyan'])
+        self.filenamePreviewLabel = T.ElidedLabel("—", "mono", color=T.CLR['cyan'])
         self.filenamePreviewLabel.setObjectName("filenamePreviewLabel")
-        self.filenamePreviewLabel.setWordWrap(True)
         v.addWidget(_labeled("Preview", self.filenamePreviewLabel))
 
         self.saveDirInput = QLineEdit("code/ena-dev/data")
@@ -352,10 +393,7 @@ class SetupPage(QWidget):
         return self.modeSelector.currentIndex() == 0
 
     def _apply_mode_visibility(self):
-        mon = self.is_monitor_mode()
-        self._rowIfbwMonitor.setVisible(mon)
-        self._rowIfbwList.setVisible(not mon)
-        self._rowNumSweeps.setVisible(not mon)
+        self.ifbwCell.setCurrentIndex(0 if self.is_monitor_mode() else 1)
 
     def _apply_cal_source_visibility(self, *_):
         existing = self.calSourceExistingRadio.isChecked()

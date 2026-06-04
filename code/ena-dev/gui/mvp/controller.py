@@ -121,6 +121,10 @@ class BackendController(QObject):
         except Exception as exc:  # noqa: BLE001
             self.sigError.emit("verify", str(exc))
         finally:
+            # read_single_trace leaves the instrument in BUS + Hold (single-sweep
+            # trigger), which freezes the front-panel free-run preview. Always
+            # restore live free-run after a verify sweep — even on error.
+            self._restore_live_safe()
             self.sigBusy.emit(False)
 
     # ── monitor loop ────────────────────────────────────────
