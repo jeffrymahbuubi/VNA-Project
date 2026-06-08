@@ -16,6 +16,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Signal, QMetaObject, Qt
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QTableWidgetItem, QFileDialog
+from PySide6.QtGui import QIcon
 
 from . import theme as T
 from . import dataflux
@@ -45,8 +46,8 @@ class MainWindow(QMainWindow):
     reqRecall = Signal(str)
     reqRunEcal = Signal(float, float, int, float, float, int)
     reqVerify = Signal()
-    reqStartMonitor = Signal(float, float)
-    reqStopMonitor = Signal()
+    reqStartPreview = Signal(float)   # G-13: start free-run live preview (on Proceed)
+    reqStopPreview = Signal()         # G-13: stop preview + restore live (on Back/close)
     reqStartSanity = Signal(object, int)
     reqStopSanity = Signal()
     reqClose = Signal()
@@ -54,6 +55,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("E5063A Data Collector")
+        if T.WTMH_ICO.exists():                       # G-14: WTMH window icon (titlebar)
+            self.setWindowIcon(QIcon(str(T.WTMH_ICO)))
         self.resize(1080, 800)
         # Responsive floor (design-system §8.5): a usable minimum, NOT the content
         # sizeHint — long labels elide (ElidedLabel) instead of forcing the window wider.
@@ -81,7 +84,9 @@ class MainWindow(QMainWindow):
         self._running = False
         self._t0 = 0.0
         self._mon_ts: list[float] = []
-        self._mon_freqs: list[float] = []
+        self._mon_yvals: list[float] = []   # G-12: scalar scroller series (MHz or dB)
+        self._mon_metric: str = "mag"       # G-12/G-13: "mag" (default) | "freq" (read at Start)
+        self._recording: bool = False       # G-13: True between Start Record and Stop
         self._mon_records: list[MonitorRecord] = []
         self._mon_start_dt = datetime.now()
         self._mon_target_dur = 0.0
@@ -105,8 +110,8 @@ class MainWindow(QMainWindow):
         self.reqRecall.connect(c.doRecall)
         self.reqRunEcal.connect(c.doRunEcal)
         self.reqVerify.connect(c.doVerify)
-        self.reqStartMonitor.connect(c.doStartMonitor)
-        self.reqStopMonitor.connect(c.doStopMonitor)
+        self.reqStartPreview.connect(c.doStartPreview)   # G-13
+        self.reqStopPreview.connect(c.doStopPreview)     # G-13
         self.reqStartSanity.connect(c.doStartSanity)
         self.reqStopSanity.connect(c.doStopSanity)
         self.reqClose.connect(c.doClose)
@@ -120,8 +125,8 @@ class MainWindow(QMainWindow):
         c.sigEcalProgress.connect(self._on_ecal_progress)
         c.sigEcalDone.connect(self._on_ecal_done)
         c.sigTrace.connect(self._on_trace)
+        c.sigLiveTrace.connect(self._on_live_trace)        # G-13
         c.sigMonitorPoint.connect(self._on_monitor_point)
-        c.sigMonitorStopped.connect(self._on_monitor_stopped)
         c.sigSanityTrace.connect(self._on_sanity_trace)
         c.sigSanityRow.connect(self._on_sanity_row)
         c.sigSanityProgress.connect(self._on_sanity_progress)
@@ -150,6 +155,8 @@ class MainWindow(QMainWindow):
         a.backClicked.connect(self._on_back)
         a.startClicked.connect(self._on_start)
         a.stopClicked.connect(self._on_stop)
+        a.displaySelector.currentIndexChanged.connect(self._on_display_changed)  # G-13
+        a.yAxisSelector.currentIndexChanged.connect(self._on_yaxis_changed)   # G-12
 
         f = self.files_page
         f.backClicked.connect(lambda: self.stack.setCurrentIndex(0))
@@ -235,8 +242,11 @@ class MainWindow(QMainWindow):
 
     def _on_recall(self):
         self._sync_model()
+        # G-15: do NOT apply the current widget grid after recall — the .sta already
+        # set the grid; re-applying a different grid would invalidate the just-loaded
+        # cal. recall_cal re-asserts the binary format and reports the grid back, which
+        # _on_recalled syncs into the widgets.
         self.reqRecall.emit(self.setup_page.calFileInput.currentText())
-        self._emit_apply_config(self._acq_ifbw_hz())
 
     def _on_run_ecal(self):
         self._sync_model()
@@ -259,8 +269,23 @@ class MainWindow(QMainWindow):
         self.acquire_page.show_mode(is_mon)
         self.acquire_page.set_running(False)
         self.acquire_page.acqDot.set_color(T.CLR['green'])
-        self.acquire_page.saveStatusLabel.setText("Armed — press Start.")
         self.stack.setCurrentIndex(1)
+        if is_mon:
+            # G-13: start the free-run live preview immediately (mimics the instrument).
+            # It runs through recording and is torn down on Back/close — not on Stop.
+            a = self.acquire_page
+            self._recording = False
+            self._mon_metric = a.monitor_yaxis_metric()
+            self.model.monitor_config.display = a.acquire_display_mode()
+            self.model.monitor_config.y_axis = self._mon_metric
+            a.set_acquire_display(a.acquire_display_mode())
+            self._mon_ts.clear(); self._mon_yvals.clear(); self._mon_records.clear()
+            a.set_monitor_progress(0, "")          # reset any leftover run progress
+            a.countLabel.setText("points: 0"); a.elapsedLabel.setText("00:00:00")
+            a.saveStatusLabel.setText("Live preview — press Start Record to log.")
+            self.reqStartPreview.emit(self._preview_interval_ms())
+        else:
+            self.acquire_page.saveStatusLabel.setText("Armed — press Start.")
 
     # ── controller results (GUI thread) ─────────────────────
     def _on_connected(self, info: dict):
@@ -287,14 +312,45 @@ class MainWindow(QMainWindow):
         if cur:
             s.calFileInput.setCurrentText(cur)
 
+    def _ensure_cal_file_listed(self, path: str):
+        """G-15: add a freshly-created/recalled .sta to calFileInput (if absent) and
+        select it, so a new cal is immediately findable without a reconnect."""
+        if not path:
+            return
+        cb = self.setup_page.calFileInput
+        if cb.findText(path) < 0:
+            cb.addItem(path)
+        cb.setCurrentText(path)
+
+    def _apply_grid_to_widgets(self, grid: dict):
+        """G-15: push a recalled-cal readback grid into the Setup widgets (blockSignals
+        so we don't re-trigger config-changed), then re-sync the model + derived labels.
+        Keeps the UI matched to the recalled cal so it isn't flagged stale."""
+        s = self.setup_page
+        for w, v in ((s.startFreqInput, grid["start_hz"] / 1e6),
+                     (s.stopFreqInput, grid["stop_hz"] / 1e6),
+                     (s.pointsInput, int(grid["points"])),
+                     (s.powerInput, grid["power_dbm"])):
+            w.blockSignals(True); w.setValue(v); w.blockSignals(False)
+        s.ifbwMonitorInput.blockSignals(True)
+        s.ifbwMonitorInput.setCurrentText(f"{grid['ifbw_hz'] / 1e3:g}")
+        s.ifbwMonitorInput.blockSignals(False)
+        self._sync_model(); self._refresh_derived()
+
     def _on_recalled(self, res: dict):
         cal = self.model.calibration
         cal.source = "existing"; cal.sta_path = res["sta_path"]
-        cal.active = res["active"]; cal.cal_type = res["cal_type"]; cal.grid = self.model.config.grid
+        cal.active = res["active"]; cal.cal_type = res["cal_type"]
+        # G-15: sync the widgets FROM the recalled grid (the .sta set it) so the cal
+        # isn't flagged stale against a mismatched widget grid; then cal.grid matches.
+        if "points" in res:
+            self._apply_grid_to_widgets(res)
+        cal.grid = self.model.config.grid
         s = self.setup_page
         s.calActiveDot.set_color(T.CLR['green'])
         s.calTypeLabel.setText(f"Correction ON · {res['cal_type']}")
         s.calSourceLabel.setText(f"recalled {res['sta_path']}")
+        self._ensure_cal_file_listed(res["sta_path"])   # G-15: keep it listed + selected
         s.calStaleHint.setVisible(False)
         self._refresh_gate()
 
@@ -314,6 +370,10 @@ class MainWindow(QMainWindow):
         s.calConfLabel.setText(f"S11 min {lo:.2f} / mean {mid:.2f} / max {hi:.2f} dB")
         s.calStaleHint.setVisible(False)
         QTimer.singleShot(800, lambda: s.calProgressBar.setVisible(False))
+        # G-15: make the freshly-saved cal findable — select it now + re-enumerate D:\
+        # (the fixed list_cal_files will include it on the next sigCalFiles).
+        self._ensure_cal_file_listed(res["sta_path"])
+        self.reqListCal.emit()
         self._refresh_gate()
 
     def _on_trace(self, freqs, s11):
@@ -324,78 +384,143 @@ class MainWindow(QMainWindow):
 
     # ── acquire actions ─────────────────────────────────────
     def _on_back(self):
-        if not self._running:
-            self.stack.setCurrentIndex(0)
+        if self._running:
+            return
+        if self.model.mode is AcquisitionMode.MONITOR:
+            self.reqStopPreview.emit()   # G-13: stop free-run + restore live before leaving
+        self.stack.setCurrentIndex(0)
 
     def _on_start(self):
         self._sync_model()
-        self._running = True
-        self._t0 = time.monotonic()
-        self._mon_ts.clear(); self._mon_freqs.clear(); self._mon_records.clear()
-        self._mon_start_dt = datetime.now()
-        self.acquire_page.set_running(True)
-        self.acquire_page.saveStatusLabel.setText("Recording…")
-        self._clock.start()
         if self.model.mode is AcquisitionMode.MONITOR:
-            a = self.acquire_page
-            txt = a.logIntervalInput.currentText().strip().lower()
-            if txt == "auto":
-                interval_ms = 0.0
-            else:
-                try:                       # F-3: clamp query interval to 20–1000 ms
-                    interval_ms = min(1000.0, max(20.0, float(txt)))
-                except ValueError:
-                    interval_ms = 0.0
-            mode = a.monitor_stop_mode()   # duration | count | manual
-            self._mon_target_dur = a.durationInput.value() if mode == "duration" else 0.0
-            self._mon_target_count = a.queryNumberInput.value() if mode == "count" else 0
-            a.set_monitor_progress(0, "")
-            self._emit_apply_config(self._acq_ifbw_hz())
-            self.reqStartMonitor.emit(interval_ms, float(self._mon_target_dur))
+            self._start_recording()
         else:
+            self._running = True
+            self._t0 = time.monotonic()
+            self._mon_start_dt = datetime.now()
+            self.acquire_page.set_running(True)
+            self.acquire_page.saveStatusLabel.setText("Benchmarking…")
+            self._clock.start()
             self.acquire_page.metricsTable.setRowCount(0)
             self._sanity_rows = []
             self.reqStartSanity.emit(self.model.config.ifbw_values, self.model.config.num_sweeps)
 
+    def _start_recording(self):
+        """G-13: begin logging — the free-run preview is already running, so this only
+        flips the recording flag, resets the session buffers, and arms the stop rule."""
+        a = self.acquire_page
+        # lock the min-scalar metric for this run (idle-only); preview keeps running.
+        self._mon_metric = a.monitor_yaxis_metric()
+        self.model.monitor_config.y_axis = self._mon_metric
+        mode = a.monitor_stop_mode()   # duration | count | manual
+        self._mon_target_dur = a.durationInput.value() if mode == "duration" else 0.0
+        self._mon_target_count = a.queryNumberInput.value() if mode == "count" else 0
+        self._mon_ts.clear(); self._mon_yvals.clear(); self._mon_records.clear()
+        self._mon_start_dt = datetime.now()
+        self._t0 = time.monotonic()
+        self._recording = True
+        self._running = True
+        a.set_running(True)
+        a.set_monitor_progress(0, "")
+        a.saveStatusLabel.setText("Recording…")
+        self._clock.start()
+
+    def _stop_recording(self, note: str):
+        """G-13: stop logging and write the CSV; the live preview KEEPS running."""
+        if not self._recording:
+            return
+        self._recording = False
+        self._running = False
+        self._clock.stop()
+        self.acquire_page.set_running(False)
+        if self._mon_records:
+            self._write_monitor_csv(note)
+        else:
+            self.acquire_page.saveStatusLabel.setText(f"Stopped ({note}). No data recorded.")
+
     def _on_stop(self):
         if self.model.mode is AcquisitionMode.MONITOR:
-            self.reqStopMonitor.emit()
+            self._stop_recording("manual stop")   # G-13: preview keeps running
         else:
             self.reqStopSanity.emit()
+
+    def _on_display_changed(self, *_):
+        """G-13: swap the Acquire plot between the live S11 trace and the min scalar.
+        Live-switchable any time — both data streams are maintained."""
+        a = self.acquire_page
+        mode = a.acquire_display_mode()
+        self.model.monitor_config.display = mode
+        a.set_acquire_display(mode)
+        a.yAxisSelector.setEnabled(mode == "minimum" and not self._running)
+        if mode == "minimum":
+            a.set_monitor_curve(self._mon_ts, self._mon_yvals)   # re-plot from buffer
+        # trace mode repaints on the next sigLiveTrace
+
+    def _on_yaxis_changed(self, *_):
+        """G-12 (re-scoped by G-13): idle-only min-scalar metric change — only fires in
+        the 'Monitor minimum' display (greyed otherwise). Relabel + clear the buffer."""
+        a = self.acquire_page
+        self._mon_metric = a.monitor_yaxis_metric()
+        self.model.monitor_config.y_axis = self._mon_metric
+        if self.model.monitor_config.display == "minimum":
+            a.set_monitor_yaxis(self._mon_metric)
+            self._mon_ts.clear(); self._mon_yvals.clear()
+            a.set_monitor_curve([], [])
 
     def _tick_clock(self):
         elapsed = time.monotonic() - self._t0
         self.acquire_page.elapsedLabel.setText(time.strftime("%H:%M:%S", time.gmtime(elapsed)))
 
-    def _on_monitor_point(self, elapsed, f0, mag):
-        self._mon_records.append(MonitorRecord(
-            self._mon_start_dt + timedelta(seconds=elapsed), f0, mag))
-        self._mon_ts.append(elapsed); self._mon_freqs.append(f0 / 1e6)
-        if len(self._mon_ts) > 600:   # plot window only; _mon_records keeps all
-            self._mon_ts = self._mon_ts[-600:]; self._mon_freqs = self._mon_freqs[-600:]
-        n = len(self._mon_records)
+    def _on_monitor_point(self, _preview_elapsed, f0, mag):
+        # G-13: the live notch readouts update every preview sweep, recording or not.
         a = self.acquire_page
-        a.set_monitor_curve(self._mon_ts, self._mon_freqs)
         a.minFreqBadge.set_value(f"{f0/1e6:.3f}")
         a.magBadge.set_value(f"{mag:.2f}")
+        if not self._recording:
+            return
+        # Recording session: log + min-scalar scroller + stop conditions (elapsed since Start).
+        rec_elapsed = time.monotonic() - self._t0
+        self._mon_records.append(MonitorRecord(
+            self._mon_start_dt + timedelta(seconds=rec_elapsed), f0, mag))
+        yval = mag if self._mon_metric == "mag" else f0 / 1e6
+        self._mon_ts.append(rec_elapsed); self._mon_yvals.append(yval)
+        if len(self._mon_ts) > 600:   # plot window only; _mon_records keeps all
+            self._mon_ts = self._mon_ts[-600:]; self._mon_yvals = self._mon_yvals[-600:]
+        n = len(self._mon_records)
+        if self.model.monitor_config.display == "minimum":
+            a.set_monitor_curve(self._mon_ts, self._mon_yvals)
         a.countLabel.setText(f"points: {n}")
-        if elapsed > 0:
-            a.rateBadge.set_value(f"{n/elapsed:.1f}")
-            a.effIntervalBadge.set_value(f"{1000*elapsed/n:.0f}")
-        # progress + remaining (F-8)
+        if rec_elapsed > 0:
+            a.rateBadge.set_value(f"{n/rec_elapsed:.1f}")
+            a.effIntervalBadge.set_value(f"{1000*rec_elapsed/n:.0f}")
+        # progress + remaining (F-8) + auto-stop
         if self._mon_target_dur > 0:
-            a.set_monitor_progress(100 * elapsed / self._mon_target_dur,
-                                   f"{max(0, self._mon_target_dur - elapsed):.0f} s left")
+            a.set_monitor_progress(100 * rec_elapsed / self._mon_target_dur,
+                                   f"{max(0, self._mon_target_dur - rec_elapsed):.0f} s left")
+            if rec_elapsed >= self._mon_target_dur:
+                self._stop_recording("duration")
         elif self._mon_target_count > 0:
             a.set_monitor_progress(100 * n / self._mon_target_count,
                                    f"{max(0, self._mon_target_count - n)} pts left")
             if n >= self._mon_target_count:
-                self.reqStopMonitor.emit()
+                self._stop_recording("count")
         else:
             a.set_monitor_progress(0, "manual — press Stop")
 
-    def _on_monitor_stopped(self, count):
-        self._finish_acquisition(f"points: {count}")
+    def _on_live_trace(self, freqs, s11):
+        # G-13: live full S11 trace (preview). Plotted only in the trace display mode.
+        if self.model.monitor_config.display == "trace":
+            self.acquire_page.set_live_trace([f / 1e6 for f in freqs], s11)
+
+    def _preview_interval_ms(self) -> float:
+        """G-13: monitor preview/record cadence from logIntervalInput ('auto'→full rate)."""
+        txt = self.acquire_page.logIntervalInput.currentText().strip().lower()
+        if txt == "auto":
+            return 0.0
+        try:                            # F-3: clamp to 20–1000 ms
+            return min(1000.0, max(20.0, float(txt)))
+        except ValueError:
+            return 0.0
 
     def _on_sanity_trace(self, freqs, s11):
         self.acquire_page.set_sanity_curve([f / 1e6 for f in freqs], s11)
@@ -419,6 +544,7 @@ class MainWindow(QMainWindow):
 
     def _finish_acquisition(self, note: str):
         self._running = False
+        self._recording = False   # G-13: also drop the monitor recording flag
         self._clock.stop()
         self.acquire_page.set_running(False)
         m = self.model

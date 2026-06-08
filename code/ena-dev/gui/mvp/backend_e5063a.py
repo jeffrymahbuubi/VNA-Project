@@ -143,18 +143,31 @@ class E5063ABackend:
         self._check("set_ifbw")
 
     # ── calibration: recall ─────────────────────────────────
-    def list_cal_files(self, directory: str = r"D:\\") -> List[str]:
-        """Best-effort enumeration of instrument-side .sta files."""
+    def list_cal_files(self, directory: str = "D:") -> List[str]:
+        """Enumerate instrument-side .sta files.
+
+        G-15: the E5063A's :MMEM:CAT? **times out** on a path with a trailing
+        backslash (e.g. "D:\\") — query the drive with NO trailing separator ("D:").
+        The old default r"D:\\" timed out → the method silently fell back to the
+        hardcoded defaults, so newly-saved cals never appeared in the GUI dropdown.
+        """
         ena = self._require()
-        defaults = [r"D:\cal_S11_200-250MHz_801pt.sta", r"D:\State03.sta"]
+        d = directory.rstrip("\\/") or "D:"
+        defaults = [d + r"\cal_S11_200-250MHz_801pt.sta", d + r"\State03.sta"]
         try:
-            raw = ena.query(f':MMEM:CAT? "{directory}"')
+            raw = ena.query(f':MMEM:CAT? "{d}"')
         except ENAConnectionError:
+            # A failed/timed-out CAT leaves the session addressed-to-talk (→ a stale
+            # -420 on the next read). Resync before falling back so we don't desync.
+            try:
+                ena._session.clear()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
             self._drain()
             return defaults
         import re
         found = re.findall(r'([^",\\]+\.sta)', raw, flags=re.IGNORECASE)
-        files = [directory.rstrip("\\/") + "\\" + f for f in found]
+        files = [d + "\\" + f for f in found]
         return files or defaults
 
     def recall_cal(self, sta_path: str) -> dict:
@@ -166,7 +179,22 @@ class E5063ABackend:
         cal_type = ena.query(":SENS1:CORR:TYPE1?").strip()
         if not active:
             raise BackendError("cal recalled but correction is NOT active")
-        return {"active": active, "cal_type": cal_type, "sta_path": sta_path}
+        # G-15: re-assert ONLY the binary transfer format (a .sta may not carry
+        # :FORM:DATA) — NOT the grid, which the .sta already set and which a re-grid
+        # would invalidate. Then read back the recalled grid so the GUI syncs its
+        # widgets to it (instead of clobbering with the stale widget grid).
+        ena.write(":FORM:DATA REAL32")
+        ena.write(":FORM:BORD SWAP")
+        ena.opc_wait()
+        self._freq_axis_hz = None
+        grid = {
+            "start_hz": float(ena.query(":SENS1:FREQ:STAR?")),
+            "stop_hz": float(ena.query(":SENS1:FREQ:STOP?")),
+            "points": int(float(ena.query(":SENS1:SWE:POIN?"))),
+            "ifbw_hz": float(ena.query(":SENS1:BAND:RES?")),
+            "power_dbm": float(ena.query(":SOUR1:POW?")),
+        }
+        return {"active": active, "cal_type": cal_type, "sta_path": sta_path, **grid}
 
     # ── calibration: ECal ───────────────────────────────────
     def detect_ecal(self, port: int = 1) -> str:

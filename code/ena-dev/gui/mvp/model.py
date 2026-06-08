@@ -101,6 +101,9 @@ class MonitorConfig:
     warmup_sweeps: int = 5
     stop_mode: str = "duration"          # "duration" | "count" | "manual"
     query_number: int = 1000             # target point count when stop_mode == "count"
+    # G-13: Acquire plot display mode + (G-12) the min-scalar metric.
+    display: str = "trace"               # "trace" (live S11) | "minimum" (scalar scroller)
+    y_axis: str = "mag"                  # min-scalar metric: "mag" (dB, default) | "freq" (MHz)
 
 
 @dataclass

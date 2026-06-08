@@ -44,11 +44,17 @@ ena-dev/
 │   ├── configure_e5063a.py         # recall a cal .sta + pin the locked operating point
 │   ├── calibrate_e5063a.py         # host-driven 1-port S11 ECal (N7550A); saves grid-named .sta
 │   ├── bench_e5063a_rates.py       # Phase-3 sweep-rate variants A–D
-│   └── bench_e5063a_realworld.py   # single + continuous IFBW benchmark → LibreVNA-compatible xlsx
-├── gui/                              # E5063A Data Collector (PySide6 MVP, built G-0…G-5)
-│   ├── e5063a_data_collector.py      # entry point — launch this
+│   ├── bench_e5063a_realworld.py   # single + continuous IFBW benchmark → LibreVNA-compatible xlsx
+│   ├── check_instrument_state.py   # diagnostic: raw read-only *IDN?/:TRIG:SOUR?/:INIT1:CONT?/:SYST:ERR? (verify left in live free-run, non-disturbing)
+│   ├── investigate_cal_files.py    # diagnostic (G-15): live :MMEM:CAT? format + list_cal_files parsing + ECal module check
+│   └── investigate_cal_load.py     # diagnostic (G-15): load a .sta + verify correction active, restore locked cal
+├── gui/                              # E5063A Data Collector (PySide6 MVP — COMPLETE G-0…G-15 + packaged G-6)
+│   ├── e5063a_data_collector.py      # entry point — launch this (sets WTMH window icon)
 │   ├── verify_backend_g2.py          # headless backend live-check (no GUI)
 │   ├── qt_mcp_mockup.py              # qt-mcp smoke-test harness
+│   ├── E5063A-Data-Collector.spec    # PyInstaller build recipe (G-6); rebuild: pyinstaller --noconfirm <spec>
+│   ├── .gitignore                    # excludes build/ dist/ output/ (regenerable)
+│   ├── dist/E5063A-Data-Collector/   # PACKAGED .exe (gitignored) → E5063A-Data-Collector.exe
 │   └── mvp/
 │       ├── __init__.py
 │       ├── theme.py                  # design tokens + widget factories (paod_app pattern)
@@ -61,7 +67,8 @@ ena-dev/
 │       ├── controller.py             # BackendController — VISA on a dedicated QThread (NF-4)
 │       ├── dataflux.py               # byte-exact Dataflux CSV writer (loads in 8_plot_monitor_data.py)
 │       ├── sanity_xlsx.py            # Sanity-check multi-sheet xlsx writer (openpyxl)
-│       └── main_window.py            # QStackedWidget shell + presenter
+│       ├── main_window.py            # QStackedWidget shell + presenter
+│       └── assets/                   # WTMH.ico + wtmh_logo.png (G-14 branding) + *_arrow.svg (G-7 carets) + prep_wtmh_assets.py (regen tool)
 ├── notebook/
 │   ├── README.md           # code/-rooted Jupyter launch rules
 │   └── 1_single_vs_continuous_sweep_e5063a.ipynb
@@ -103,6 +110,23 @@ rates to xlsx. Headless backend check (no GUI): `uv run python ena-dev/gui/verif
 > message on connect/stop/close. **Stop any run (go idle) before closing — never kill the
 > process mid-sweep** (a host killed mid-USBTMC-read makes the instrument log
 > −420 "Query UNTERMINATED"; cleared by `:DISP:CCL`, auto-handled on next connect).
+
+## Packaging to a standalone `.exe` (G-6)
+
+Built + validated (auto-py-to-exe / PyInstaller One-Directory). Full guide:
+**`docs/e5063a-packaging.md`**. Rebuild from the committed recipe:
+
+```powershell
+cd code\ena-dev\gui
+../../.venv/Scripts/pyinstaller.exe --noconfirm E5063A-Data-Collector.spec
+# → dist/E5063A-Data-Collector/E5063A-Data-Collector.exe
+```
+
+⚠️ The `.exe` removes the *Python* requirement but **not** the VISA driver — every target PC
+still needs **Keysight IO Libraries Suite** (the native IVI VISA backend can't be bundled).
+Two build gotchas (handled in the `.spec`): exclude `PyQt5`/`PyQt6` (the venv has PyQt6 too →
+PyInstaller aborts on dual Qt bindings), and `ena_dev_paths.py` has a `sys.frozen` guard so
+the packaged app doesn't raise on the dev-tree dir check.
 
 ## References
 

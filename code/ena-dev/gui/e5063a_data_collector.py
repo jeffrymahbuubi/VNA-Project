@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QIcon
 
 from mvp import theme as T
 from mvp.main_window import MainWindow
@@ -27,6 +28,8 @@ from mvp.main_window import MainWindow
 def main() -> int:
     app = QApplication(sys.argv)
     app.setStyleSheet(T.STYLESHEET)
+    if T.WTMH_ICO.exists():                       # G-14: WTMH window/taskbar icon
+        app.setWindowIcon(QIcon(str(T.WTMH_ICO)))
     win = MainWindow()
     win.show()
     return app.exec()

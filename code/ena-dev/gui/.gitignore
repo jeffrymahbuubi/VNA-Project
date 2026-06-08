@@ -1,0 +1,7 @@
+# PyInstaller / auto-py-to-exe build artifacts (G-6). The .spec is kept (build recipe);
+# the build/ work dir, dist/ output, and logs are regenerable — not committed.
+/build/
+/dist/
+/_build_log.txt
+/output/
+__pycache__/
