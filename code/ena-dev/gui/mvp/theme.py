@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QProgressBar, QSizePolicy, QComboBox,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QColor, QPainter, QBrush
+from PySide6.QtGui import QFont, QColor, QPainter, QBrush, QPixmap
 import pyqtgraph as pg
 
 # ═══════════════════════════════════════════════════════════
@@ -129,6 +129,10 @@ _ASSETS = Path(__file__).resolve().parent / "assets"
 _ARROW_DOWN     = (_ASSETS / "down_arrow.svg").as_posix()
 _ARROW_DOWN_DIM = (_ASSETS / "down_arrow_dim.svg").as_posix()
 _ARROW_UP       = (_ASSETS / "up_arrow.svg").as_posix()
+# WTMH lab branding (G-14 / D-21): .ico = window/taskbar + PyInstaller --icon;
+# wtmh_logo.png = downscaled emblem for the TopBar (regen via assets/prep_wtmh_assets.py).
+WTMH_ICO = _ASSETS / "WTMH.ico"
+WTMH_LOGO = _ASSETS / "wtmh_logo.png"
 
 # ═══════════════════════════════════════════════════════════
 # GLOBAL STYLESHEET  (built once from tokens, applied at app root)
@@ -503,6 +507,9 @@ def setup_plot(pw, y_range=(-60.0, 5.0)):
         ax.setPen(pg.mkPen(CLR['border'], width=0.8))
         ax.setTextPen(pg.mkPen(CLR['t3']))
         ax.setStyle(tickFont=font("tiny"), tickLength=-5)
+        # Axes carry fixed units (dB / MHz / s) — never let pyqtgraph rescale a small
+        # span with an SI prefix (e.g. a shallow dB notch showing "(×0.001)").
+        ax.enableAutoSIPrefix(False)
     pw.showGrid(x=True, y=True, alpha=0.15)
     pw.setMenuEnabled(False)
     pw.hideButtons()
@@ -574,7 +581,7 @@ class MetricBadge(QWidget):
 class TopBar(QWidget):
     """Gradient header: status dot + title + optional right widget."""
 
-    def __init__(self, title, dot_color=None, right_widget=None, parent=None):
+    def __init__(self, title, dot_color=None, right_widget=None, show_logo=True, parent=None):
         super().__init__(parent)
         self.setFixedHeight(44)
         self.setStyleSheet(
@@ -584,6 +591,17 @@ class TopBar(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 0, 14, 0)
         row.setSpacing(10)
+        # WTMH lab emblem (G-14 / D-21): ~28 px, far-left before the dot, emblem-only.
+        # Fixed size so it never grows the header (responsive §8). Shown on every TopBar.
+        if show_logo and WTMH_LOGO.exists():
+            self.logo = QLabel(); self.logo.setObjectName("topbarLogo")
+            self.logo.setPixmap(QPixmap(str(WTMH_LOGO)).scaled(
+                28, 28, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+            self.logo.setFixedSize(28, 28)
+            self.logo.setStyleSheet("background:transparent;border:none;")
+            self.logo.setToolTip("Wearable Technology & Mobile Healthcare — NCKU")
+            row.addWidget(self.logo)
         self.dot = StatusDot(dot_color or CLR['t3'], size=9)
         row.addWidget(self.dot)
         self.title_lbl = label(title, "section", bold=True)

@@ -70,16 +70,43 @@ Realized in `code/ena-dev/gui/` — see `view_setup.py` (Screen 1), `view_acquir
 | `CONFIGURED` | Setup | config valid (grid/points/IFBW/power/mode set) | cal card actions |
 | `CALIBRATED` | Setup | correction active (recalled `.sta` **or** fresh ECal) | `verifyButton`, `proceedButton` |
 | `READY` | Setup | CALIBRATED + filename resolved | `proceedButton` |
-| `ARMED` | Acquire | on Acquire page, not yet running | `startButton`, `backButton` |
-| `RUNNING` | Acquire | recording/benchmarking | `stopButton` (Back/Start disabled) |
+| `ARMED` | Acquire | on Acquire page; **live S11 preview free-running (G-13)**, not yet recording | `startButton`, `backButton`, `displaySelector` |
+| `RUNNING` | Acquire | recording/benchmarking (**preview keeps running, G-13**) | `stopButton`, `displaySelector` (Back/Start disabled) |
 | `SAVING` | Acquire | flushing file | (all disabled, brief) |
-| `SAVED` | Acquire | file written, path shown | `startButton`, `backButton` |
+| `SAVED` | Acquire | file written, path shown (**preview still free-running, G-13**) | `startButton`, `backButton`, `displaySelector` |
 
 **Gating rules (deterministic):**
 - `proceedButton.enabled  ⇔  state ∈ {CALIBRATED, READY}` i.e. `device.connected AND calibration.active AND config.is_valid()`. (Filename label may be empty → defaults to `run`; not a gate.)
 - `startButton.enabled   ⇔  page==Acquire AND state ∈ {ARMED, SAVED}`.
 - `stopButton.enabled    ⇔  state == RUNNING`.
 - `backButton.enabled    ⇔  page==Acquire AND state ≠ RUNNING AND state ≠ SAVING`.
+- `displaySelector.enabled ⇔ page==Acquire` (G-13 — switch Live trace ⇄ Monitor minimum **any time**, including during a run; both data streams are maintained so the swap is instant).
+- `yAxisSelector.enabled ⇔  state ≠ RUNNING AND displaySelector == "Monitor minimum"` (G-12, **re-scoped by G-13** — the freq/magnitude choice only affects the Monitor-minimum scalar; it is meaningless for the Live trace, which is always magnitude-vs-frequency, so it greys out while Live trace is shown; still idle-only locked during a run).
+
+### 1.1 Live-preview lifecycle (G-13)
+
+The Monitor page mimics the instrument's live screen. **Entering Acquire starts a free-run
+preview; it is independent of recording:**
+
+```
+ Proceed ─► [ARMED]  monitor_begin() + free-run tick loop starts
+                      → live S11 trace updates every sweep (NOT logging)
+   Start Record ─► [RUNNING]  same loop now ALSO appends MonitorRecords + applies stop
+                              conditions; the live trace keeps updating
+   Stop ─► [SAVED]   logging stops, CSV written; the free-run preview KEEPS running
+   Start Record (again) ─► [RUNNING] …                         (run again, no re-arm)
+   Back to Setup ─► preview stops (monitor_end + restore_live), stack→Setup
+```
+
+- The preview is armed **once** on Proceed (`monitor_begin`) and torn down **once** on Back
+  / window-close (`monitor_end` + `restore_live`) — **not** on Stop. This is the key
+  state-machine change vs the pre-G-13 design (where the sweep loop started at Start and
+  stopped at Stop).
+- `Start Record` no longer arms the instrument; it only flips a **recording flag** (resets
+  the record `t0`/count, starts appending records, enables the duration/count stop). `Stop`
+  clears the flag and writes the CSV; the instrument stays free-running.
+- `elapsed`/`count`/`rate` badges reflect the **recording session** (since Start); the live
+  trace and the rolling scalar scroller reflect the **continuous preview**.
 
 ---
 
@@ -91,6 +118,7 @@ All widgets built in code from `theme.py` factories (design-system D-1); **no `.
 ### 2.1 TopBar (`setupTopBar`)
 | Element | objectName | Factory | Content |
 |---|---|---|---|
+| **WTMH emblem** (G-14) | `topbarLogo` | `TopBar(show_logo=True)` | ~28 px WTMH lab logo, far-left before the dot (emblem-only). Appears on every TopBar via the factory. design-system §9.11/D-21. |
 | Title | `setupTitle` | `TopBar(title=...)` | "E5063A Data Collector — Setup" |
 | Connection dot | `connDot` | `StatusDot` | grey=disconnected, green=connected, red=error |
 
@@ -128,7 +156,7 @@ A radio/segmented `calSourceSelector` chooses one of two branches.
 **Branch A — Use existing cal (`calExistingPanel`):**
 | Widget | objectName | Type | Notes |
 |---|---|---|---|
-| Cal file | `calFileInput` | `QComboBox`(editable) | instrument-side `.sta` path; default `D:\cal_S11_200-250MHz_801pt.sta` |
+| Cal file | `calFileInput` | `QComboBox`(editable) | instrument-side `.sta` path; default `D:\cal_S11_200-250MHz_801pt.sta`. **BUG (G-15, live-diagnosed 2026-06-04):** this dropdown only ever shows 2 hardcoded defaults — `list_cal_files` queries `:MMEM:CAT? "D:\\"` (trailing backslash) which **times out** on the E5063A, so a new/different-config cal never lists (save+load both work). Fix = query `:MMEM:CAT? "D:"` (strip trailing sep) + **refresh after ECal/recall** + fail-loud. gui-spec §6.2. |
 | ~~Browse host…~~ | ~~`calBrowseButton`~~ | — | **REMOVED (G-9, 2026-06-04):** never wired and redundant — the `calFileInput` dropdown already lists instrument-side `.sta`, and the cal workflow saves `.sta` on the instrument. Host `.sta` upload deemed unnecessary. |
 | Recall | `recallButton` | `button()` | runs `configure_e5063a.configure()` recall path in a QThread |
 
@@ -180,6 +208,7 @@ Common shell + a mode-specific panel. The mode comes from Screen 1 (`model.mode`
 ### 3.1 Common shell
 | Widget | objectName | Type | Notes |
 |---|---|---|---|
+| WTMH emblem (G-14) | `topbarLogo` | `TopBar(show_logo=True)` | same ~28 px WTMH emblem as Setup (every TopBar brands via the factory). |
 | TopBar title | `acquireTitle` | `TopBar` | "Acquiring — {Monitor\|Sanity Check}" |
 | Acquire dot | `acqDot` | `StatusDot` | green=armed, amber=running, blue=saved, red=error |
 | Back to Setup | `backButton` | `button_sm()` | enabled only when idle (§1) |
@@ -192,12 +221,23 @@ Common shell + a mode-specific panel. The mode comes from Screen 1 (`model.mode`
 | Save status | `saveStatusLabel` | `ElidedLabel` (design-system §8.4) | "Saved → <path>" after SAVED. **Live-testing fix (2026-06-04, G-7):** a plain `QLabel` here grew the window 1080→1632 px when the path was long (#6). Must be an `ElidedLabel` (`minimumWidth=0`, `ElideMiddle`, full path in tooltip) so it never raises the layout's minimum width. |
 
 ### 3.2 Monitor panel (`monitorPanel`) — mode = Continuous Monitor
-Backend: `GUIVNAMonitorAdapter` (wraps `bench_e5063a_realworld` continuous + min-freq
-extraction). Emits `(t, min_freq_hz, mag_db)` per sweep.
+Backend: `GUIVNAMonitorAdapter` (continuous free-run). Each sweep yields the **full S11
+trace** `(freqs_hz, s11_db)`; the min-S11 `(min_freq_hz, mag_db)` is derived from it. Both
+are available to the View — see the dual-display plot below (**G-13**).
+
+> **G-13 dual-display monitor plot.** `monitorPlot` has two display modes, chosen by
+> `displaySelector`; the live preview free-runs from Proceed (§1.1):
+> - **"Live S11 trace"** *(default)* — the **whole sweep**, S11 magnitude (dB) on Y vs
+>   frequency (MHz) on X, replaced each sweep. Mimics the instrument screen; lets the user
+>   verify the signal **before and during** recording.
+> - **"Monitor minimum"** — the scalar scroller: min-S11 metric (freq **or** magnitude per
+>   `yAxisSelector`) vs time (the pre-G-13 behavior, kept).
 
 | Widget | objectName | Type | Notes |
 |---|---|---|---|
-| Min-freq scroller | `monitorPlot` | `pg.PlotWidget`+`setup_plot()` | min-S11 frequency (Hz) vs time; primary plot |
+| Dual-mode plot | `monitorPlot` | `pg.PlotWidget`+`setup_plot()` | primary plot. **Live trace mode:** Y=S11 mag (dB), X=freq (MHz), curve replaced each sweep, autorange. **Monitor-minimum mode:** Y=`yAxisSelector` metric, X=time (s), scrolling. Axis labels + X meaning swap with `displaySelector` (G-13). |
+| **Display** (G-13) | `displaySelector` | `QComboBox` | **NEW (G-13).** Items: `"Live S11 trace"` (**default**) / `"Monitor minimum"`. Switches what `monitorPlot` shows. **Switchable any time** (incl. during a run — both streams are maintained, §1). Pure View/presenter. First control in the monitor options row. |
+| **Min metric** (G-12) | `yAxisSelector` | `QComboBox` | Items: `"Magnitude (dB)"` (**default — changed by G-13**) / `"Min-S11 freq (MHz)"`. Chooses the **Monitor-minimum** scalar series (`MonitorRecord.s11_db` vs `.freq_hz`). **Only meaningful when `displaySelector=="Monitor minimum"`** → greyed otherwise; still **idle-only** during a run (§1 gating). No backend/SCPI/CSV change (both series always logged; `minFreqBadge`/`magBadge` always shown). design-system §9.9/D-19. |
 | Duration (s) | `durationInput` | `QDoubleSpinBox` | `monitor_config.duration_s`; 0/checkbox = indefinite |
 | Indefinite | `indefiniteCheck` | `QCheckBox` | when ✔, disables `durationInput` (stop = manual) |
 | Log interval | `logIntervalInput` | `QComboBox`(editable) | `monitor_config.log_interval_ms` ("auto" or ms). **Live-testing fix (2026-06-04, G-7):** rendered "uto" (the "a" of "auto" clipped) — set `setMinimumContentsLength(7)` + `setMinimumWidth(SIZE['combo_min_w'])` (design-system §8.2) so the full text fits. Applies to all editable combos (`ifbwMonitorInput`, `calFileInput`, `stopModeSelector`). |
@@ -231,7 +271,7 @@ Pure-logic, GUI-free (keeps unit-testability). Changes from the LibreVNA model:
 |---|---|
 | `CalibrationState` | Repurpose for E5063A: `source: str` ∈ {"existing","ecal"}; `sta_path: str` (instrument-side); `active: bool` (was `loaded`, mirrors `:SENS1:CORR:STAT?`); `cal_type: str` (e.g. "SOLT1"); `grid: tuple[int,int,int]` (start,stop,points the cal is valid for); `ecal_port: int = 1`; `conf_min_mean_max: tuple[float,float,float] \| None`. **Drop** JSON `.cal` semantics. |
 | `SweepConfig` | `start_frequency/stop_frequency/num_points` become **user-editable** (no `update_from_cal_file`); add `is_grid_stale_vs(cal_grid)` helper to drive `calStaleHint`. Keep `ifbw_values` (sanity), add nothing else. |
-| `MonitorConfig` | unchanged (already has `ifbw_hz`, `log_interval_ms`, `duration_s`, `warmup_sweeps`). |
+| `MonitorConfig` | **add `display: str = "trace"`** (G-13 — Acquire plot mode ∈ {`"trace"`,`"minimum"`}; default Live S11 trace) and **`y_axis: str = "mag"`** (G-12, **default changed freq→mag by G-13** per "default = magnitude" — the Monitor-minimum scalar metric ∈ {`"freq"`,`"mag"`}, read at Start). Otherwise unchanged (already has `ifbw_hz`, `log_interval_ms`, `duration_s`, `warmup_sweeps`, `stop_mode`, `query_number`). |
 | **NEW** `AcquisitionMode` | `Enum`: `MONITOR`, `SANITY`. Stored as `VNADataModel.mode`. |
 | **NEW** `FilenameSpec` | `label: str`, `include_mode: bool`, `include_grid: bool` (timestamp always); method `compose(model, ext) -> str` (§5). |
 | `VNADataModel` | add `mode: AcquisitionMode`, `filename: FilenameSpec`; `is_ready_to_collect()` → `device.connected and calibration.active and config.is_valid()`. |
@@ -272,15 +312,18 @@ Start/Stop/Span/IFBW/Points/Log-Interval) lives **inside** the file per F-9/NF-5
 | edit config inputs | `_on_config_changed` | — | `config.*` / `monitor_config.*` | `center/spanLabel`, `calStaleHint` if grid changed post-cal, state→CONFIGURED |
 | `modeSelector` | `_on_mode_changed` | — | `model.mode` | show/hide monitor vs sanity rows |
 | `recallButton` | `_on_recall_cal` | `CalRecallWorker` → `configure_e5063a.configure(recall)` | `calibration.{active,sta_path,cal_type,grid}` | `calActiveDot`, `calTypeLabel`, state→CALIBRATED |
-| `runEcalButton` | `_on_run_ecal` | `CalibrateWorker` → `calibrate_e5063a.calibrate()` | `calibration.*` + new `.sta` path | `calProgressBar`, `calConfLabel`, `calActiveDot`, state→CALIBRATED |
+| `runEcalButton` | `_on_run_ecal` | `CalibrateWorker` → `calibrate_e5063a.calibrate()` | `calibration.*` + new `.sta` path | `calProgressBar`, `calConfLabel`, `calActiveDot`, state→CALIBRATED. **G-15 fix:** on done, re-list (`reqListCal`) **and** add+select the new `.sta` in `calFileInput` so it's immediately findable. |
 | `verifyButton` | `_on_verify` | `VNAPreviewWorker` (1 sweep) | latest trace cache | `s11PreviewPlot`, `verifyStatusLabel` |
 | filename fields | `_on_filename_changed` | — | `filename.*` | `filenamePreviewLabel` |
 | `saveDirButton` (G-9) | `_on_browse_savedir` | `QFileDialog.getExistingDirectory` | `model.save_data_folder` | `saveDirInput` text |
-| `proceedButton` | `_on_proceed` | — | — | stack→page1, build `monitorPanel`/`sanityPanel`, state→ARMED |
-| `startButton` (monitor) | `_on_start_monitor` | `GUIVNAMonitorAdapter.start_recording(interval, duration, on_point)` | `is_monitoring=True`, append `MonitorRecord` | `monitorPlot` scroll, badges, `elapsed/countLabel`, state→RUNNING |
+| `proceedButton` (monitor, G-13) | `_on_proceed` | **`controller.doStartPreview(interval)`** → `monitor_begin()` + free-run tick loop (no logging) | `mode`, set `display`/`y_axis` view→model | stack→page1, build panel, `monitorPlot` live trace starts, state→ARMED |
+| live preview tick (monitor, G-13) | `_on_live_trace` / `_on_monitor_point` | controller `sigLiveTrace(freqs,s11)` + `sigMonitorPoint(t,f0,mag)` per sweep | rolling buffers; `MonitorRecord` appended **only while recording** | `monitorPlot` (active display), `minFreqBadge`/`magBadge` (always both), `rateBadge` |
+| `displaySelector` (monitor, G-13) | `_on_display_changed` | — (no backend; both streams maintained) | `monitor_config.display` ∈ {`trace`,`minimum`} | swap `monitorPlot` mode (axis labels + curve source); enable/grey `yAxisSelector` |
+| `yAxisSelector` (monitor, G-12) | `_on_yaxis_changed` | — (no backend) | `monitor_config.y_axis` ∈ {`freq`,`mag`} | when display==minimum: scalar axis **label + autorange** swap. Idle-only; greyed when display==trace (§1). |
+| `startButton` (monitor, G-13) | `_on_start_monitor` | **flips `controller` recording flag** (preview already running) — resets record `t0`/count, arms duration/count stop | `is_monitoring=True`, begin appending `MonitorRecord` | badges/`elapsed/countLabel` reflect the session, state→RUNNING (preview unaffected) |
 | `startButton` (sanity) | `_on_start_sanity` | `GUIVNASweepAdapter.run_single_ifbw_sweep` loop | append `SweepData` | `s11LivePlot`, `overallProgress`, `metricsTable`, state→RUNNING |
-| `stopButton` | `_on_stop` | adapter `stop_recording(out_dir)` / abort loop | finalize | save file, `saveStatusLabel`, state→SAVED |
-| `backButton` | `_on_back` | — | — | stack→page0, state→READY |
+| `stopButton` (monitor, G-13) | `_on_stop` | **clears recording flag** (preview keeps running) → write CSV | finalize records | save file, `saveStatusLabel`, state→SAVED |
+| `backButton` (monitor, G-13) | `_on_back` | **`controller.doStopPreview()`** → `monitor_end()` + `restore_live()` | — | stack→page0, state→READY (instrument back to live free-run) |
 
 All worker classes are `QThread` (NF-4: every VISA call off the GUI thread; GUI holds
 60 fps). Cross-thread updates go via Signals → slots, exactly as the LibreVNA presenter
@@ -363,3 +406,12 @@ to convert to `ElidedLabel`: `filenamePreviewLabel`, `calSourceLabel`, `idnLabel
 | 2026-06-04 | **G-10 implemented + qt-mcp-validated.** Global QSS change shipped; Setup cards now uniform (no dark bands behind IFBW/Center-Span/connection-info/cal-status), Files page + window base correct, no regression. | Claude (with Aunuun) |
 | 2026-06-04 | **G-11 specced (not implemented).** Validated: IFBW combo (424 px) wider than Start (345 px) → rebuild `ifbwCell` pages with a grid mirroring the config columns so the monitor combo == col1 width; add spin-button `:hover`/`:pressed` feedback (mirror the combo). Spec design-system §9.8/D-17-D-18. | Claude (with Aunuun) |
 | 2026-06-04 | **G-11 implemented + qt-mcp-validated.** `ifbwCell` pages rebuilt as grids mirroring the config columns (+ col2 spacer) → IFBW combo 424→352 px, right edge aligned with Start; spin `:hover`/`:pressed` QSS added (clean parse). | Claude (with Aunuun) |
+| 2026-06-04 | **G-15 fixed + live-validated.** `list_cal_files` queries `:MMEM:CAT? "D:"` (no more timeout) → dropdown lists all `D:\*.sta` (2→5 live); `_on_ecal_done`/`_on_recalled` refresh+select the new cal; recall no longer clobbers the grid (widgets sync FROM the recalled cal, stays active). Live vs `MY54806798`: recall 201pt→widgets 201+active, fresh ECal 401pt→dropdown 5→6 auto-selected+active. §2.4/§6. | Claude (with Aunuun) |
+| 2026-06-04 | **G-15 calibration file-listing bug diagnosed + fix specced (not implemented).** A new/different-config ECal cal doesn't appear in `calFileInput` to recall. Live root cause: `list_cal_files` queries `:MMEM:CAT? "D:\\"` (trailing backslash) → E5063A timeout → silent fallback to 2 hardcoded defaults (save+load both verified working). Fix in §2.4 (`calFileInput` note) + §6 wiring (`runEcalButton` re-lists + selects the new `.sta`); full diagnosis/fix in gui-spec §6.2. | Claude (with Aunuun) |
+| 2026-06-04 | **G-14 implemented + qt-mcp-validated (stub).** WTMH emblem (`topbarLogo`, 28 px) renders on every TopBar (Setup + Files visually confirmed, Acquire instance present); window/taskbar icon set from `WTMH.ico`. View-layer only via `theme.TopBar(show_logo=True)`. | Claude (with Aunuun) |
+| 2026-06-04 | **G-14 WTMH lab branding specced (not implemented).** Add the WTMH (NCKU) lab logo as a ~28 px header emblem (`topbarLogo`) on every TopBar (Setup/Acquire/Files, emblem-only — §2.1/§3.1), plus the OS window/taskbar icon and the packaged `.exe` icon. Assets → `mvp/assets/` (`WTMH.ico` + downscaled `wtmh_logo.png`); one `theme.TopBar` `show_logo` change brands all screens. Design in design-system §9.11/D-21; packaging hook in gui-spec G-6. Awaiting go-ahead. | Claude (with Aunuun) |
+| 2026-06-04 | **G-13 live-instrument validated (E5063A `MY54806798`).** Full flow vs real hardware: real S11 trace (noise + notch ~240 MHz) free-runs on Proceed; real rate ~38.8 Hz (26 ms/sweep); 1050-pt real CSV loads in `8_plot_monitor_data.py`; preview keeps running post-Stop; **Back and close-with-preview-running both leave `:TRIG:SOUR? INT` / `:INIT1:CONT? 1` + clean error queue** (real `restore_live`; no BUS+Hold, no −420; exit 0). §1.1 lifecycle confirmed on hardware. | Claude (with Aunuun) |
+| 2026-06-04 | **G-13 implemented + qt-mcp-validated (stub).** Live S11 trace free-runs on Proceed (verified: full notch renders with no Start press); `displaySelector` swaps Live trace ⇄ Monitor minimum live (axis Freq↔Time, `yAxisSelector` greyed in trace / enabled in minimum / locked during run); Start fills the scalar scroller + progress; display switchable mid-record; Stop writes the Dataflux CSV (2287 pts) while the preview keeps free-running; Back restores Setup; re-Proceed restarts cleanly; 0 Qt warnings. State machine §1.1 realized: `monitor_begin` on Proceed, `monitor_end`/`restore_live` on Back/close, recording flag on Start/Stop. | Claude (with Aunuun) |
+| 2026-06-04 | **G-13 live S11 trace preview + Acquire display modes specced (not implemented).** Redirect: the Acquire monitor plot should mimic the instrument — show a **live full S11 trace** (magnitude dB vs frequency) the moment the user Proceeds, so they can verify the signal before recording; the min-S11 scalar view is kept as a non-default option. User-locked (AskUserQuestion 2026-06-04): (a) **two controls** — a `displaySelector` (Live S11 trace ⇄ Monitor minimum) + the G-12 `yAxisSelector` re-scoped to the minimum view; (b) preview **free-runs from Proceed and continues through recording** — Start only toggles file logging; (c) **Monitor mode only** (Sanity already shows traces). Defaults flipped to **Live trace + magnitude**. State-machine change: ARMED/RUNNING/SAVED all hold a free-run preview (armed once on Proceed via `monitor_begin`, torn down on Back/close); the controller gains `sigLiveTrace`, `doStartPreview`/`doStopPreview`, and a recording flag (reusing the proven `read_trace_continuous` — full trace already read every sweep, only the min was kept). Edits: §1 (states + §1.1 lifecycle + gating), §3.2 (`displaySelector` + dual-mode `monitorPlot` + re-scoped `yAxisSelector`), §4 (`MonitorConfig.display`, `y_axis` default→`mag`), §6 (Proceed/back/start/stop rewiring + live-trace tick). Sibling: gui-spec G-13, design-system §9.10/D-20. Awaiting approval to implement. | Claude (with Aunuun) |
+| 2026-06-04 | **G-12 implemented + qt-mcp-validated (stub).** `yAxisSelector` added to the monitor options row (`view_acquire.py`); idle-only (`set_running` disables it during RUNNING, re-enables on Stop — both confirmed); `_on_yaxis_changed` relabels the scroller axis live while idle; metric locked at Start and routed into the plot buffer; `MonitorConfig.y_axis` added. qt-mcp vs STUB: default freq, switch → axis "S11 magnitude (dB)" + scroller plots the dB series autoranged, both badges still show freq+mag, no Qt warnings, graceful close. Dataflux CSV unchanged. | Claude (with Aunuun) |
+| 2026-06-04 | **G-12 monitor Y-axis toggle specced (not implemented).** Feedback: let the user plot the Acquire monitor scroller's Y-axis as **magnitude (dB)** as well as the default min-S11 frequency (MHz). Discovery confirmed the magnitude is *already logged* (`MonitorRecord.s11_db`, emitted per sweep by `backend_e5063a.monitor_read`) → **View + presenter only, zero backend/SCPI/CSV change.** Locked via user decisions: (a) **combo selector** `yAxisSelector` (mirrors `stopModeSelector`/`logIntervalInput`); (b) "Magnitude (dB)" = S11 magnitude at the tracked notch minimum; (c) **idle-only** (selector disabled while RUNNING). Added: §3.2 `yAxisSelector` row + `monitorPlot` note, §1 gating rule, §4 `MonitorConfig.y_axis` field, §6 wiring row. Sibling: gui-spec G-12, design-system §9.9/D-19. Awaiting go-ahead to implement. | Claude (with Aunuun) |

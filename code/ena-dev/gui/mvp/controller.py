@@ -27,8 +27,8 @@ class BackendController(QObject):
     sigEcalProgress = Signal(int)
     sigEcalDone = Signal(dict)
     sigTrace = Signal(object, object)            # freqs_hz, s11_db
-    sigMonitorPoint = Signal(float, float, float)  # elapsed_s, freq_hz, mag_db
-    sigMonitorStopped = Signal(int)              # total points
+    sigLiveTrace = Signal(object, object)        # G-13: full S11 trace per sweep (freqs_hz, s11_db)
+    sigMonitorPoint = Signal(float, float, float)  # preview_elapsed_s, min_freq_hz, mag_db
     sigSanityTrace = Signal(object, object)      # freqs_hz, s11_db
     sigSanityRow = Signal(dict)                  # one IFBW's metrics
     sigSanityProgress = Signal(int)
@@ -42,11 +42,9 @@ class BackendController(QObject):
         super().__init__(parent)
         self._factory = backend_factory
         self._be = None
-        # monitor state
+        # monitor live-preview state (G-13)
         self._mon_timer: QTimer | None = None
         self._mon_t0 = 0.0
-        self._mon_duration = 0.0
-        self._mon_count = 0
         # sanity state
         self._san_timer: QTimer | None = None
         self._san_ifbws: List[int] = []
@@ -127,55 +125,51 @@ class BackendController(QObject):
             self._restore_live_safe()
             self.sigBusy.emit(False)
 
-    # ── monitor loop ────────────────────────────────────────
-    @Slot(float, float)
-    def doStartMonitor(self, interval_ms: float, duration_s: float):
+    # ── monitor live-preview loop (G-13) ────────────────────
+    # The preview free-runs from Proceed (doStartPreview) and is torn down on
+    # Back/close (doStopPreview) — NOT on Stop. Each sweep emits the FULL trace
+    # (sigLiveTrace) AND the min-S11 scalar (sigMonitorPoint). Recording (which
+    # points get logged + stop conditions) is owned by the presenter via a flag;
+    # the controller is a pure free-run engine here.
+    @Slot(float)
+    def doStartPreview(self, interval_ms: float):
         if self._mon_timer is None:
             self._mon_timer = QTimer(self)
-            self._mon_timer.timeout.connect(self._mon_tick)
+            self._mon_timer.timeout.connect(self._preview_tick)
         self._mon_t0 = time.monotonic()
-        self._mon_duration = duration_s
-        self._mon_count = 0
         try:
             self._be.monitor_begin()   # arm continuous latched free-run (full rate)
         except Exception as exc:  # noqa: BLE001
             self.sigError.emit("monitor_begin", str(exc))
             return
-        # Floor at 5 ms so the event loop can service Stop between ticks. On real
-        # hardware monitor_read blocks until the next sweep (~30 ms), so this floor
-        # adds no rate penalty; it only tames the instant stub. "auto" → the floor.
+        # Floor at 5 ms so the event loop can service requests between ticks. On real
+        # hardware read_trace_continuous blocks until the next sweep (~30 ms), so this
+        # floor adds no rate penalty; it only tames the instant stub. "auto" → floor.
         self._mon_timer.setInterval(max(5, int(interval_ms)))
         self._mon_timer.start()
 
     @Slot()
-    def doStopMonitor(self):
+    def doStopPreview(self):
         if self._mon_timer is not None:
             self._mon_timer.stop()
-        self._monitor_end_safe()
-        self.sigMonitorStopped.emit(self._mon_count)
-
-    def _monitor_end_safe(self):
         try:
             if self._be is not None:
                 self._be.monitor_end()   # stop + restore live front-panel sweep
         except Exception:  # noqa: BLE001
             self._restore_live_safe()
 
-    def _mon_tick(self):
+    def _preview_tick(self):
         try:
-            f0, mag = self._be.monitor_read()
+            freqs, s11 = self._be.read_trace_continuous()
         except Exception as exc:  # noqa: BLE001
             if self._mon_timer:
                 self._mon_timer.stop()
-            self.sigError.emit("monitor", str(exc))
+            self.sigError.emit("preview", str(exc))
             return
+        idx = min(range(len(s11)), key=lambda i: s11[i])
         elapsed = time.monotonic() - self._mon_t0
-        self._mon_count += 1
-        self.sigMonitorPoint.emit(elapsed, f0, mag)
-        if self._mon_duration > 0 and elapsed >= self._mon_duration:
-            self._mon_timer.stop()
-            self._monitor_end_safe()
-            self.sigMonitorStopped.emit(self._mon_count)
+        self.sigLiveTrace.emit(freqs, s11)               # full trace (live preview)
+        self.sigMonitorPoint.emit(elapsed, freqs[idx], s11[idx])  # min-S11 scalar
 
     # ── sanity loop ─────────────────────────────────────────
     @Slot(object, int)

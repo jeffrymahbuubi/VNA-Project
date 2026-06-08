@@ -72,13 +72,15 @@ class AcquirePage(QWidget):
         v = QVBoxLayout(c)
         v.setContentsMargins(T.SIZE['card_pad'], T.SIZE['card_pad_v'],
                              T.SIZE['card_pad'], T.SIZE['card_pad_v']); v.setSpacing(10)
-        v.addWidget(T.section_header("Continuous Monitor — min-S11 frequency", T.CLR['cyan']))
+        v.addWidget(T.section_header("Continuous Monitor — live S11 preview", T.CLR['cyan']))
 
         self.monitorPlot = pg.PlotWidget()
         self.monitorPlot.setObjectName("monitorPlot")
         T.setup_plot(self.monitorPlot, y_range=None)
-        self.monitorPlot.setLabel('left', 'Min-S11 freq (MHz)')
-        self.monitorPlot.setLabel('bottom', 'Time (s)')
+        # G-13: default display = live S11 trace (mag dB vs freq). set_acquire_display()
+        # swaps these for the "Monitor minimum" scalar scroller.
+        self.monitorPlot.setLabel('left', 'S11 magnitude (dB)')
+        self.monitorPlot.setLabel('bottom', 'Frequency (MHz)')
         self._monitorCurve = self.monitorPlot.plot(
             [], [], pen=pg.mkPen(T.CLR['trace_monitor'], width=2))
         v.addWidget(self.monitorPlot, 1)
@@ -95,6 +97,15 @@ class AcquirePage(QWidget):
         self.logIntervalInput = QComboBox(); self.logIntervalInput.setObjectName("logIntervalInput")
         self.logIntervalInput.setEditable(True)
         self.logIntervalInput.addItems(["auto", "50", "100", "200", "500", "1000"])
+        # G-13: choose what the plot shows — the live full S11 trace (default) or the
+        # min-S11 scalar scroller. Switchable any time (both data streams are maintained).
+        self.displaySelector = QComboBox(); self.displaySelector.setObjectName("displaySelector")
+        self.displaySelector.addItems(["Live S11 trace", "Monitor minimum"])
+        # G-12 (re-scoped by G-13): the min-scalar metric — only meaningful in "Monitor
+        # minimum" display; default "Magnitude (dB)" (G-13); idle-only + greyed in trace mode.
+        self.yAxisSelector = QComboBox(); self.yAxisSelector.setObjectName("yAxisSelector")
+        self.yAxisSelector.addItems(["Magnitude (dB)", "Min-S11 freq (MHz)"])
+        self.yAxisSelector.setEnabled(False)   # default display = trace → metric N/A
         oh.addWidget(T.label("Stop by", "label", color=T.CLR['t2']))
         oh.addWidget(self.stopModeSelector)
         self._lblDuration = T.label("Duration", "label", color=T.CLR['t2'])
@@ -103,10 +114,14 @@ class AcquirePage(QWidget):
         oh.addWidget(self._lblCount); oh.addWidget(self.queryNumberInput)
         oh.addWidget(T.label("Interval (ms)", "label", color=T.CLR['t2']))
         oh.addWidget(self.logIntervalInput)
+        oh.addWidget(T.label("Display", "label", color=T.CLR['t2']))
+        oh.addWidget(self.displaySelector)
+        oh.addWidget(T.label("Y-axis", "label", color=T.CLR['t2']))
+        oh.addWidget(self.yAxisSelector)
         oh.addStretch()
         # responsive: min width + combo min-contents so "auto" et al. never clip (§8.2)
-        for _w in (self.stopModeSelector, self.durationInput,
-                   self.queryNumberInput, self.logIntervalInput):
+        for _w in (self.stopModeSelector, self.durationInput, self.queryNumberInput,
+                   self.logIntervalInput, self.displaySelector, self.yAxisSelector):
             T.field(_w)
         v.addWidget(opts)
 
@@ -205,10 +220,45 @@ class AcquirePage(QWidget):
         self.startButton.setEnabled(not running)
         self.stopButton.setEnabled(running)
         self.backButton.setEnabled(not running)
+        # G-12/G-13: the min-scalar metric is idle-only AND only meaningful in the
+        # "Monitor minimum" display. displaySelector stays enabled (live-switchable).
+        self.yAxisSelector.setEnabled(not running and self.acquire_display_mode() == "minimum")
         self.acqDot.set_color(T.CLR['amber'] if running else T.CLR['green'])
 
-    def set_monitor_curve(self, ts, freqs_mhz):
-        self._monitorCurve.setData(ts, freqs_mhz)
+    def set_monitor_curve(self, ts, yvals):
+        self._monitorCurve.setData(ts, yvals)
+
+    def set_live_trace(self, freqs_mhz, s11_db):
+        """G-13: plot the full S11 sweep (live trace display mode)."""
+        self._monitorCurve.setData(freqs_mhz, s11_db)
+
+    def acquire_display_mode(self) -> str:
+        """G-13: which display the plot shows — 'trace' (live S11) or 'minimum' (scalar)."""
+        return "minimum" if self.displaySelector.currentIndex() == 1 else "trace"
+
+    def set_acquire_display(self, mode: str):
+        """G-13: swap the monitorPlot between the live S11 trace and the min-scalar
+        scroller — sets axis labels, clears the curve, and autoranges."""
+        if mode == "minimum":
+            self.set_monitor_yaxis(self.monitor_yaxis_metric())   # left label per metric
+            self.monitorPlot.setLabel('bottom', 'Time (s)')
+        else:                                                     # live full S11 trace
+            self.monitorPlot.setLabel('left', 'S11 magnitude (dB)')
+            self.monitorPlot.setLabel('bottom', 'Frequency (MHz)')
+        self._monitorCurve.setData([], [])
+        self.monitorPlot.enableAutoRange(axis='xy')
+
+    def monitor_yaxis_metric(self) -> str:
+        """G-12: the min-scalar metric — 'mag' (dB, default) or 'freq' (MHz)."""
+        return "freq" if self.yAxisSelector.currentIndex() == 1 else "mag"
+
+    def set_monitor_yaxis(self, metric: str):
+        """G-12: swap the scalar scroller's left-axis label + autorange for the metric."""
+        if metric == "mag":
+            self.monitorPlot.setLabel('left', 'S11 magnitude (dB)')
+        else:
+            self.monitorPlot.setLabel('left', 'Min-S11 freq (MHz)')
+        self.monitorPlot.enableAutoRange(axis='y')
 
     def set_sanity_curve(self, freqs_mhz, s11_db):
         self._sanityCurve.setData(freqs_mhz, s11_db)

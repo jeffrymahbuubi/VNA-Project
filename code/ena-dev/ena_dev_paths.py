@@ -30,15 +30,20 @@ _ENA_DEV_DIR = Path(__file__).resolve().parent          # code/ena-dev/
 _CODE_DIR = _ENA_DEV_DIR.parent                          # code/
 _ENA_QT6_SUITE_DIR = _CODE_DIR / "ena_qt6_suite"         # code/ena_qt6_suite/
 
-if not _ENA_QT6_SUITE_DIR.is_dir():
-    raise ImportError(
-        f"ena_qt6_suite not found at {_ENA_QT6_SUITE_DIR}. "
-        "Was the Amp suite copied into code/ena_qt6_suite/?"
-    )
-
-_path_str = str(_ENA_QT6_SUITE_DIR)
-if _path_str not in sys.path:
-    sys.path.insert(0, _path_str)
+# In a frozen build (PyInstaller / auto-py-to-exe, G-6) the `core` package is
+# collected INTO the bundle and is importable directly, while this dev-tree dir
+# does NOT exist relative to the unpacked module — so skip the dir check + the
+# sys.path insert when frozen (they'd raise / point at a nonexistent dir). The
+# Windows VISA PATH fix below still runs (it's needed in the frozen app too).
+if not getattr(sys, "frozen", False):
+    if not _ENA_QT6_SUITE_DIR.is_dir():
+        raise ImportError(
+            f"ena_qt6_suite not found at {_ENA_QT6_SUITE_DIR}. "
+            "Was the Amp suite copied into code/ena_qt6_suite/?"
+        )
+    _path_str = str(_ENA_QT6_SUITE_DIR)
+    if _path_str not in sys.path:
+        sys.path.insert(0, _path_str)
 
 
 # -- Windows VISA PATH augmentation ----------------------------------------

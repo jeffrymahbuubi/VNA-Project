@@ -873,7 +873,7 @@ Prefix `A:` for floppy; `/` or `\` separators. Overwrites silently. All set form
 
 | Command | Syntax / params | Notes |
 |---------|-----------------|-------|
-| `:MMEM:CAT?` | `:MMEMory:CATalog? <dir>` | Returns `"{used},{free},{name1},,{size1},,…"` (size 0 = directory). |
+| `:MMEM:CAT?` | `:MMEMory:CATalog? <dir>` | Returns `"{used},{free},{name1},,{size1},,…"` (size 0 = directory). **⚠ GOTCHA (live-confirmed 2026-06-04, G-15): a directory arg with a TRAILING BACKSLASH times out** — `:MMEM:CAT? "D:\"` → `VI_ERROR_TMO` (and leaves the session addressed-to-talk → stale −420). Query the drive with NO trailing separator: `:MMEM:CAT? "D:"`. Parse `.sta`/file names from the comma-list. |
 | `:MMEM:MDIR` | `:MMEMory:MDIRectory <dir>` | Make directory. |
 | `:MMEM:COPY` | `:MMEMory:COPY <src>,<dst>` | Copy file. |
 | `:MMEM:DEL` | `:MMEMory:DELete <name>` | Delete file/dir (recursive for dir). |

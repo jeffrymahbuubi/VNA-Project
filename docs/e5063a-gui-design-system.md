@@ -52,6 +52,9 @@ panels + recessed input wells), semibold/brighter labels, combo caret flips ▲ 
 | D-15 | **Clean IFBW-row structure + grid spacing** — replace the overlapping shared-cell mode widgets with a per-mode **container** swapped by visibility; bump config grid `verticalSpacing` 10 → 14. | The overlapping widgets in the IFBW grid cells collapsed that row's spacing to **0 px** (Points touched IFBW, #1a). See §9.6. |
 | D-17 | **IFBW cell must mirror the config grid columns** — the monitor IFBW field should be the same width as Start/Stop (col1). The G-9 `ifbwCell` page used `[label][combo,1][stretch,1]` → combo width `(W−130)/2`, wider than col1's `(W−260)/2`. Fix: give each `ifbwCell` page a `QGridLayout` with the same 4-column structure + stretches as the parent grid. | Live feedback (2026-06-04, G-11): IFBW combo measured 424 px vs Start 345 px — looked "longer"/out of place. See §9.8. |
 | D-18 | **Spin buttons get `:hover`/`:pressed` feedback** — add `QSpinBox/QDoubleSpinBox::up/down-button:hover` (lighten) + `:pressed` (accent_dim), mirroring the combo's `::drop-down:pressed`, so clicking a spin arrow feels responsive. | Live feedback (2026-06-04, G-11): spin arrows gave no click feedback unlike the combo drop-down. See §9.8. |
+| D-19 | **Monitor Y-axis selector reuses the combo pattern** (G-12, feature 2026-06-04; **default flipped to "Magnitude (dB)" + re-scoped to the minimum view by G-13/D-20**). A `yAxisSelector` `QComboBox` (items `"Magnitude (dB)"` default / `"Min-S11 freq (MHz)"`) in the monitor options row, built from the existing combo factory + `field()` — **no new token/factory**. **Idle-only** (disabled while RUNNING) **and greyed when `displaySelector=="Live S11 trace"`** (the trace is always mag-vs-freq). The View work is `set_monitor_yaxis(metric)` (label + autorange swap on the scalar display); both `minFreqBadge`/`magBadge` stay live regardless. | Feature: view the notch *depth* (S11 magnitude, dB) as well as its *frequency* — both already logged (`MonitorRecord`); a combo needs no new primitive. See §9.9. |
+| D-21 | **WTMH lab branding — emblem in `TopBar` + window/.exe icon** (G-14, feature 2026-06-04). Lab assets live in `mvp/assets/` (same dir + absolute-path convention as the SVG carets, `_ASSETS`): `WTMH.ico` (copied from `LibreVNA-dev/gui/resources/`, multi-res — window/taskbar + PyInstaller `--icon`) and a **downscaled** `wtmh_logo.png` (~256 px from the 6 MB original — header emblem). `theme.TopBar` gets an optional logo (default = WTMH emblem ~28 px, `SmoothTransformation`, far-left before the status dot) so **all three TopBars** (Setup/Acquire/Files) brand automatically. `QApplication.setWindowIcon(QIcon(_ASSETS/"WTMH.ico"))` + `MainWindow.setWindowIcon`. Emblem-only (no text — the app title carries the name; ring text is illegible at 28 px). **Do NOT adopt the LibreVNA `.qrc`/`pyside6-rcc` path** — ena-dev uses direct-path assets + PyInstaller `--add-data`. | User request (lab the work was done with). A reusable `TopBar` logo param brands every screen from one change; `.ico` is the right multi-res source for Windows window + .exe icons. See §9.11. |
+| D-20 | **Acquire `monitorPlot` is dual-mode + a `displaySelector`** (G-13, feature 2026-06-04). The Monitor plot serves **two displays** swapped by a new `displaySelector` `QComboBox` (`"Live S11 trace"` default / `"Monitor minimum"`): Live trace = full S11 sweep, mag (dB) vs freq (MHz), one curve replaced each sweep; Monitor minimum = the G-12 scalar scroller. View work: a `set_acquire_display(mode)` (swaps axis labels + which curve source) and a `set_live_trace(freqs_mhz, s11_db)` setter alongside the existing `set_monitor_curve`. Reuses the combo factory + `field()` and `setup_plot` (one plot, two data shapes) — **no new token/factory**. `displaySelector` is **always enabled** on the Acquire page (live-switchable, both data streams maintained), unlike the idle-only `yAxisSelector`. | Feature: the live preview must mimic the instrument screen (full trace) while keeping the min-scalar as an option; a second combo + a plot-mode swap is the minimal, consistent realization. See §9.10. |
 | D-16 | **Layout containers must be transparent** — the global `QWidget { background-color: bg }` paints every layout-only sub-container (`ifbwCell`+pages, `derived` Center/Span, connection `wrap`, cal `sel`/`status`, filename rows, Acquire sub-rows) with the *darker window* colour, creating "dead-zone" bands inside the lighter cards. Fix: **drop `background-color` from the universal `QWidget` rule** and set it on `QMainWindow` instead, so containers default to transparent and the card colour shows through. | Live feedback (2026-06-04, G-10): the IFBW row and the info-text rows (Center/Span, etc.) showed a darker band and the text looked tight to the border. The slate palette (D-10) made the bg/card contrast visible enough to notice. One global change fixes every section. See §9.7. |
 
 ---
@@ -521,6 +524,156 @@ Mirrors the combo's `::drop-down:pressed` → clicking a spin arrow now lightens
 **Verify (qt-mcp, under G-11):** `ifbwMonitorInput.width == startFreqInput.width`; hovering/pressing
 a spin up/down button changes its background (screenshot during a held press).
 
+### 9.9 G-12 — monitor Y-axis selector (feature 2026-06-04 — ✅ implemented + qt-mcp-validated, stub)
+
+User feedback: the Acquire **monitor scroller** plots min-S11 frequency (MHz) on Y; let the
+user switch it to **magnitude (dB)** (the notch depth). Discovery (read of the live code)
+confirmed both series are already produced per sweep — `backend_e5063a.monitor_read` returns
+`(min_freq_hz, mag_db)`, `MonitorRecord` stores both, the presenter shows both badges, and
+`dataflux.py` always writes both columns. So this is a **View + presenter change only — no
+backend/SCPI/CSV change** (D-19).
+
+**View (`view_acquire.py`):**
+- Add to the monitor options row (beside `logIntervalInput`):
+  ```python
+  self.yAxisSelector = QComboBox(); self.yAxisSelector.setObjectName("yAxisSelector")
+  self.yAxisSelector.addItems(["Min-S11 freq (MHz)", "Magnitude (dB)"])
+  T.field(self.yAxisSelector)          # responsive min-width, §8.2
+  oh.addWidget(T.label("Y-axis", "label", color=T.CLR['t2'])); oh.addWidget(self.yAxisSelector)
+  ```
+- Generalize the plot setter + add a label/range swap:
+  ```python
+  def monitor_yaxis_metric(self) -> str:        # "freq" | "mag"
+      return "mag" if self.yAxisSelector.currentIndex() == 1 else "freq"
+  def set_monitor_yaxis(self, metric: str):
+      if metric == "mag":
+          self.monitorPlot.setLabel('left', 'S11 magnitude (dB)')
+      else:
+          self.monitorPlot.setLabel('left', 'Min-S11 freq (MHz)')
+      self.monitorPlot.enableAutoRange(axis='y')   # both metrics autorange
+  ```
+  Keep `set_monitor_curve(ts, yvals)` generic (it already just calls `setData`).
+- Gate the selector in `set_running()`: `self.yAxisSelector.setEnabled(not running)` (idle-only).
+
+**Presenter (`main_window.py`):** at monitor Start, read `metric = a.monitor_yaxis_metric()`,
+store it (`model.monitor_config.y_axis = metric`), call `a.set_monitor_yaxis(metric)`, reset
+the scroller buffer. In `_on_monitor_point`, append the chosen metric to the plot buffer
+(`f0/1e6` when `freq`, `mag` when `mag`) instead of always `f0/1e6`; both badges unchanged.
+*(Idle-only means no live re-plot path is required — the metric is fixed for the run.)*
+
+**Model (`model.py`):** `MonitorConfig.y_axis: str = "freq"` (ux-spec §4).
+
+**Verify (qt-mcp, under G-12):** `yAxisSelector` present + objectName resolves; default index 0;
+`set_property currentIndex 1` before Start → `monitorPlot` left-axis label reads "S11 magnitude
+(dB)" and the scroller plots the dB series (`qt_scene_snapshot`); selector `[disabled]` while
+RUNNING; the saved Dataflux CSV is unchanged (still both columns, loads in `8_plot_monitor_data.py`).
+
+### 9.10 G-13 — live S11 trace preview + dual-mode monitor plot (feature 2026-06-04 — ✅ implemented + qt-mcp-validated, stub + live `MY54806798`)
+
+User redirect: the Acquire Monitor plot should **mimic the instrument** — show the **live full
+S11 trace** (magnitude dB vs frequency) the moment the user Proceeds, free-running, so the
+signal can be verified before/while recording. The min-S11 scalar scroller (G-11/G-12) is
+**kept** as a non-default display. Defaults flip to **Live trace + magnitude**. Two controls
+(D-20 + re-scoped D-19); preview lifecycle in ux-spec §1.1.
+
+**View (`view_acquire.py`):**
+- New control, **first** in the monitor options row (before `yAxisSelector`):
+  ```python
+  self.displaySelector = QComboBox(); self.displaySelector.setObjectName("displaySelector")
+  self.displaySelector.addItems(["Live S11 trace", "Monitor minimum"])
+  T.field(self.displaySelector)
+  oh.addWidget(T.label("Display", "label", color=T.CLR['t2'])); oh.addWidget(self.displaySelector)
+  ```
+- Default the `yAxisSelector` to **index 0 = "Magnitude (dB)"** (swap the two item strings so
+  magnitude is first) — D-19.
+- Dual-mode plot API (one `pg.PlotWidget`, two data shapes):
+  ```python
+  def acquire_display_mode(self) -> str:        # "trace" | "minimum"
+      return "minimum" if self.displaySelector.currentIndex() == 1 else "trace"
+  def set_acquire_display(self, mode: str):
+      if mode == "minimum":                      # scalar scroller (G-12 metric)
+          self.set_monitor_yaxis(self.monitor_yaxis_metric())   # label per yAxisSelector
+          self.monitorPlot.setLabel('bottom', 'Time (s)')
+      else:                                       # live full S11 trace
+          self.monitorPlot.setLabel('left', 'S11 magnitude (dB)')
+          self.monitorPlot.setLabel('bottom', 'Frequency (MHz)')
+      self.monitorPlot.enableAutoRange(axis='xy')
+      self._monitorCurve.setData([], [])          # clear on mode switch
+  def set_live_trace(self, freqs_mhz, s11_db):    # called each sweep in trace mode
+      self._monitorCurve.setData(freqs_mhz, s11_db)
+  ```
+  `displaySelector` always enabled on the Acquire page; greys `yAxisSelector` when mode=="trace".
+
+**Presenter (`main_window.py`):** on Proceed, `controller.doStartPreview(interval)`; on each
+`sigLiveTrace(freqs,s11)` plot the trace when display=="trace"; on each `sigMonitorPoint`
+keep the scalar rolling buffer and (when recording) append `MonitorRecord`. `_on_display_changed`
+calls `set_acquire_display` + toggles `yAxisSelector` enabled. Start/Stop flip the recording
+flag; Back/close → `doStopPreview` (`monitor_end`+`restore_live`).
+
+**Controller (`controller.py`):** add `sigLiveTrace = Signal(object, object)`; split the monitor
+path into `doStartPreview` (arm `monitor_begin` + free-run tick emitting both `sigLiveTrace` and
+`sigMonitorPoint`, **no** record/count), a `recording` flag (set by a `setRecording`/start slot),
+and `doStopPreview` (`monitor_end`). Reuses `read_trace_continuous` (already reads the full trace).
+
+**Verify (qt-mcp, under G-13):** on Proceed the `monitorPlot` shows a live S11 curve (X=freq,
+Y=mag dB) updating without pressing Start; `displaySelector` switches to "Monitor minimum" → the
+scalar scroller (X=time) with `yAxisSelector` enabled; default `yAxisSelector` text == "Magnitude
+(dB)"; Start logs while the trace keeps moving; Stop writes CSV and the trace keeps moving; Back
+restores live free-run (`:TRIG:SOUR? INT`/`:INIT1:CONT? 1`, clean error queue); 0 QSS warnings.
+
+### 9.11 G-14 — WTMH lab branding (feature 2026-06-04 — ✅ implemented + qt-mcp-validated, stub)
+
+Use the **WTMH** (Wearable Technology & Mobile Healthcare, NCKU) lab logo as the app's
+icon + an in-app emblem, so the packaged `.exe` and the running GUI both carry the lab
+brand. User-locked: **emblem in the header on all screens, emblem-only (no text)**, plus
+the window/taskbar icon and the `.exe` icon.
+
+**Assets (D-21).** Copy into `code/ena-dev/gui/mvp/assets/`:
+- `WTMH.ico` — from `code/LibreVNA-dev/gui/resources/WTMH.ico` (15 KB, multi-resolution).
+  Used for the window/taskbar icon AND the PyInstaller `--icon` (G-6).
+- `wtmh_logo.png` — a **downscaled** ~256×256 PNG derived from the 6 MB
+  `LibreVNA-dev/gui/resources/WTMH.png` (do **not** commit the 6 MB original; scale once
+  via PIL/an image tool). Used for the header emblem (scaled to ~28 px at runtime).
+
+Referenced by absolute path via the existing `_ASSETS` constant (same convention as the
+SVG carets) — **not** the LibreVNA `.qrc`. PyInstaller bundles `mvp/assets/` via
+`--add-data` (G-6).
+
+**Window + taskbar icon (`e5063a_data_collector.py`).**
+```python
+from PySide6.QtGui import QIcon
+from mvp import theme as T
+app.setWindowIcon(QIcon(str(T._ASSETS / "WTMH.ico")))   # taskbar / Alt-Tab / titlebar
+...
+win.setWindowIcon(QIcon(str(T._ASSETS / "WTMH.ico")))    # belt-and-braces on the window
+```
+
+**Header emblem (`theme.TopBar`).** Add an optional logo at the far left (before the
+status dot) — default-on so every page brands without per-page edits:
+```python
+def __init__(self, title, dot_color=None, right_widget=None, show_logo=True, parent=None):
+    ...
+    if show_logo:
+        logo = QLabel(); logo.setObjectName("topbarLogo")
+        pm = QPixmap(str(_ASSETS / "wtmh_logo.png")).scaled(
+            28, 28, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+        logo.setPixmap(pm); logo.setFixedSize(28, 28)
+        logo.setStyleSheet("background:transparent;border:none;")
+        row.addWidget(logo)
+    row.addWidget(self.dot)   # existing
+    ...
+```
+All three pages build their header via `theme.TopBar`, so Setup, Acquire, and Files each
+get the emblem from this one change. `objectName="topbarLogo"` (a page may re-scope it if
+qt-mcp needs to disambiguate the three instances).
+
+**Verify (qt-mcp, under G-14):** every `TopBar` shows a 28 px WTMH emblem left of the dot
+(`qt_find_widget topbarLogo` resolves, `qt_screenshot` shows the emblem); the OS window
+icon is the WTMH logo (titlebar/taskbar); 0 QSS warnings; long-path/responsive checks
+(§8.6) still hold (the fixed 28 px emblem doesn't grow the header). PyInstaller `.exe` icon
+is verified under G-6.
+
 ### 9.5 Acceptance (qt-mcp, under G-8)
 - Maximized: Configuration fills the width with no large empty card zone.
 - Labels render semibold + brighter; inputs visibly recessed against lighter panels.
@@ -542,6 +695,14 @@ a spin up/down button changes its background (screenshot during a held press).
 ## 11. Changelog
 | Date | Change | By |
 |------|--------|-----|
+| 2026-06-04 | **G-14 implemented + qt-mcp-validated (stub) — §9.11, D-21.** `assets/prep_wtmh_assets.py` (Pillow) copied `WTMH.ico` + scaled `wtmh_logo.png` 256 px into `mvp/assets/`; `theme.py` `WTMH_ICO`/`WTMH_LOGO` + `TopBar(show_logo=True)` 28 px emblem (QPixmap import added); `setWindowIcon` in entry + window. qt-mcp: 3× `topbarLogo` 28×28, Setup+Files headers render the emblem, window icon multi-res from `.ico`, 0 QSS warnings. | Claude (with Aunuun) |
+| 2026-06-04 | **G-14 WTMH lab branding specced (not implemented) — §9.11, D-21.** Use the WTMH (NCKU) lab logo as the window/taskbar icon + `.exe` icon + a ~28 px emblem in every `TopBar` (Setup/Acquire/Files), emblem-only. Assets → `mvp/assets/` (`WTMH.ico` copied from `LibreVNA-dev/gui/resources/`; downscaled `wtmh_logo.png` ~256 px from the 6 MB original), absolute-path via `_ASSETS` (not the LibreVNA `.qrc`). One `theme.TopBar` `show_logo` change brands all screens; `setWindowIcon` in the entry + window. PyInstaller `--icon`/`--add-data` hooks land in G-6. | Claude (with Aunuun) |
+| 2026-06-04 | **Axis SI-prefix fix (all plots).** `setup_plot()` now calls `ax.enableAutoSIPrefix(False)` on both axes (in the existing bottom/left loop). Axes carry fixed units (dB / MHz / s), so pyqtgraph must never rescale a small span with an SI prefix (the live-observed "(×0.001)" on a shallow dB notch). Applies to every plot (monitor, verify preview, sanity). Headless-verified: `autoSIPrefix == False` on left+bottom after `setup_plot`. | Claude (with Aunuun) |
+| 2026-06-04 | **G-13 live-instrument validated (E5063A `MY54806798`) — §9.10.** Real S11 trace free-runs on Proceed (~38.8 Hz), display swap + gating correct, Back/close leave the instrument live + clean. **Minor cosmetic seen live (now fixed, see next entry):** pyqtgraph autorange applied a "(×0.001)" SI-prefix to the magnitude axis when a sweep's notch was very shallow (a `setup_plot` default, not G-13-specific). | Claude (with Aunuun) |
+| 2026-06-04 | **G-13 implemented + qt-mcp-validated (stub) — §9.10, D-20 (+ D-19 default flip).** Built to the §9.10 sketch: `displaySelector` combo, `set_acquire_display(mode)` (axis-label/curve-source swap), `set_live_trace()` beside `set_monitor_curve`, `yAxisSelector` default magnitude + greyed in trace mode. qt-mcp vs STUB: live full-trace notch on Proceed, trace↔minimum swap (X Freq↔Time), idle/run gating correct, recording fills the scalar scroller, Stop keeps the preview live, 0 QSS warnings. No new token/factory. | Claude (with Aunuun) |
+| 2026-06-04 | **G-13 live S11 trace preview + dual-mode monitor plot specced (not implemented) — §9.10, D-20 (+ D-19 default flip).** New `displaySelector` combo (Live S11 trace / Monitor minimum) makes `monitorPlot` dual-mode; `set_acquire_display(mode)` + `set_live_trace()` alongside the existing scalar `set_monitor_curve`; `yAxisSelector` default flipped to "Magnitude (dB)" and greyed in trace mode. No new token/factory (reuses combo factory + `field()` + `setup_plot`). Controller/presenter + state-machine work in §9.10 / ux-spec §1.1. | Claude (with Aunuun) |
+| 2026-06-04 | **G-12 monitor Y-axis selector implemented + qt-mcp-validated (stub) — §9.9, D-19.** Built exactly to the §9.9 sketch: `yAxisSelector` combo (combo factory + `field()`, `minimumContentsLength=7`), `set_monitor_yaxis(metric)` label/autorange swap, `monitor_yaxis_metric()`, idle-only gate in `set_running()`. qt-mcp vs STUB: default index 0 ("Min-S11 freq (MHz)"); index 1 → axis "S11 magnitude (dB)" + scroller plots the dB series autoranged; selector `[disabled]` while RUNNING, re-enabled after Stop; 0 QSS parse warnings; graceful close. No new token/factory. | Claude (with Aunuun) |
+| 2026-06-04 | **G-12 monitor Y-axis selector specced (not implemented) — §9.9, D-19.** Feature: let the monitor scroller plot magnitude (dB) as well as min-S11 frequency (MHz). Both series are already logged (`MonitorRecord`), so it's a View+presenter change with no new design-system primitive — a `yAxisSelector` `QComboBox` (reusing the combo factory + `field()`), a `set_monitor_yaxis(metric)` label/autorange swap, and idle-only gating in `set_running()`. Code sketch + qt-mcp acceptance in §9.9. | Claude (with Aunuun) |
 | 2026-06-04 | **G-11 implemented + qt-mcp-validated — §9.8, D-17/D-18.** `view_setup.py`: `ifbwCell` pages rebuilt as `QGridLayout`s mirroring the config columns (+ a `QWidget` spacer in monitor col2) → IFBW combo 424→352 px, right edge aligned with Start (345 px). `theme.py`: spin `::up/down-button:hover`/`:pressed` QSS (no parse warnings). | Claude (with Aunuun) |
 | 2026-06-04 | **G-11 specced (not implemented) — §9.8, D-17/D-18.** Validated: (a) IFBW combo 424 px > Start 345 px (the G-9 `ifbwCell` monitor page over-widened the combo) → rebuild each page with a `QGridLayout` mirroring the config grid's 4 cols/stretches so the monitor combo == col1 width; (b) spin up/down buttons have no click feedback → add `:hover`/`:pressed` QSS mirroring the combo's `::drop-down:pressed`. | Claude (with Aunuun) |
 | 2026-06-04 | **G-10 container dead-zone fix implemented + qt-mcp-validated — §9.7, D-16.** Dropped the universal `QWidget {{background-color}}`; set it on `QMainWindow`. Verified: Setup cards uniform (no dark bands on IFBW/Center-Span/connection-info/cal-status), inputs keep recessed wells, Files page + window base correct (no transparency regression); Acquire covered by shared factories. | Claude (with Aunuun) |
