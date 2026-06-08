@@ -4,6 +4,9 @@
 **Created:** 2026-05-28
 **Owner:** Aunuun Jeffry Mahbuubi
 **Canonical companion:** `docs/project-overview.md` (LibreVNA narrative), `CLAUDE.md` (project rules)
+**Dated analyses:** `docs/e5063a-20260604-sweep-rate-analysis.md` (sweep-rate vs points/IFBW/span +
+the speed↔accuracy trade-off mental model for the blood-vessel monitor; open accuracy question +
+next-session plan to deep-dive the `bloodvessel_monitor` CSVs)
 
 ---
 
@@ -623,7 +626,7 @@ for the resonant notch). Empirical sweep-time data: `code/ena-dev/data/20260602/
 > spec builds on. Requirements F-1…F-10 / NF-1…NF-5 above are the contract the GUI
 > spec implements.
 
-### 5.5 Status: ✅ Validated — **GUI built (G-0…G-5)** in `code/ena-dev/gui/`, live-validated against the instrument. Details + phase status in `docs/e5063a-gui-spec.md`. Only G-6 (`.exe` packaging) remains.
+### 5.5 Status: ✅ COMPLETE — **GUI built (G-0…G-15) + packaged (G-6 `.exe`)** in `code/ena-dev/gui/`, all live-validated against the instrument. Details + phase status in `docs/e5063a-gui-spec.md`; packaging in `docs/e5063a-packaging.md`. (Post-G-5 work 2026-06-04: G-12 monitor Y-axis toggle, G-13 live S11 trace preview + display modes, G-14 WTMH lab branding, G-15 cal file-listing bug fix, G-6 standalone `.exe`.)
 
 ---
 
@@ -925,6 +928,38 @@ jump, because the E5063A single path is already host-paced and efficient. The
 ≥30 Hz operating point is now reachable in continuous mode down to ~100 kHz IFBW
 (32.8 Hz), vs single mode topping out at ~28.5 Hz @ 100 kHz.
 
+### 6.8 Phase 3 follow-up — points × IFBW × span sweep-rate map (2026-06-04)
+
+Extends the fixed-801pt benchmarks to a full **number-of-points (101→1001) × IFBW
+(1→300 kHz)** grid plus a frequency-span comparison, collected from the GUI's
+Device Sanity-Check mode. Dataset: `REPORT/20260604/20260604/` (11 sanity `.xlsx`
++ 2 `bloodvessel_monitor` CSVs). Full write-up + figures:
+`docs/e5063a-20260604-sweep-rate-analysis.md`; notebook
+`code/ena-dev/notebook/2_sweep_rate_vs_config_e5063a.ipynb`.
+
+- **Sweep-time model** (fit, R²=0.99997): `t_sweep(N,IFBW) ≈ 4.64 + N·(0.0230 +
+  0.959/IFBW_kHz)` ms; `rate = 1000/t_sweep`. Predicts the rate of ANY untested
+  (points, IFBW); consistent at N=801 with the older `≈ 25 + 869/IFBW` model.
+- **Span is a small secondary effect** (not first-order): at 801 pt the 20 MHz
+  span ran ~7% faster on average than 50 MHz (confounded by ~10% host-VISA
+  jitter). First-order rate is set by **points × IFBW** (~30× range).
+- **Operating map** (200–250 MHz): 801pt/300kHz = 39.5 Hz (clears 30 Hz at the
+  finest grid tested); 801pt/50kHz = 26.1 Hz (clears 25 Hz, more DR margin).
+  Noise floor flat (~0.017 dB) across IFBW; jitter rises with IFBW.
+
+**Accuracy trade-off + OPEN question (carry forward).** The frequency precision of
+the logged min-S11 notch = point spacing **Δf = span/(N−1)** under the current raw
+**argmin** min-search (all GUI paths). For a **localised** dip, narrowing the span
+is the *free* accuracy lever (finer Δf + slightly faster) — adding points only
+costs speed. Parabolic 3-point interpolation (decouples precision from N) was
+prototyped this session then **deferred** (no code change adopted). **OPEN:** is
+higher frequency accuracy actually needed? Decisive ratio = physiological min-freq
+excursion ÷ Δf. **Next session:** deep-dive the two `bloodvessel_monitor` CSVs
+(notebook 3) to answer it — plan in the dated doc §7 + memory
+`project-e5063a-bloodvessel-accuracy-tradeoff`.
+
+#### 6.8.1 Status: ✅ Analyzed (sweep-rate map + model); ⬜ accuracy question OPEN (next-session bloodvessel deep-dive)
+
 ---
 
 ## 7. Phase 4 — Data Format Compatibility
@@ -1091,7 +1126,7 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 | S-11a | `code/ena-dev/scripts/configure_e5063a.py` written and runs clean (16/16 OK) — recalls cal, pins locked operating point, sets binary REAL32 + SWAP | §4A | ✅ Validated | 2026-05-28 |
 | S-11b | `configure_e5063a.py` accepts both host paths (auto-upload via `:MMEM:TRAN`) and instrument-side paths. Validated 17/17 OK end-to-end. | §4A | ✅ Validated | 2026-05-28 |
 | S-10 | DataFlux-equivalent GUI scoped & wireframed (own GUI in `ena-dev/gui/`) — detailed plan + UX in `docs/e5063a-gui-spec.md` + `docs/e5063a-gui-ux-spec.md` | §5 / GUI-spec | ✅ Validated | 2026-06-02 |
-| S-11 | **DataFlux-equivalent GUI implemented (`code/ena-dev/gui/`) — phases G-0…G-5 ✅ live-validated:** Configure + host ECal + Sanity Check + Continuous Monitor + History; Dataflux CSV byte-compatible with `8_plot_monitor_data.py`; Monitor sustained 39.1 Hz (drift +0.32% over 120 s). Only G-6 (`.exe`) remains. Full status in `docs/e5063a-gui-spec.md`. | §5 / GUI-spec | ✅ Validated | 2026-06-02 |
+| S-11 | **DataFlux-equivalent GUI implemented (`code/ena-dev/gui/`) — phases G-0…G-5 ✅ live-validated:** Configure + host ECal + Sanity Check + Continuous Monitor + History; Dataflux CSV byte-compatible with `8_plot_monitor_data.py`; Monitor sustained 39.1 Hz (drift +0.32% over 120 s). **ALL GUI phases now complete (2026-06-04): G-12 monitor Y-axis toggle, G-13 live S11 trace preview + display modes, G-14 WTMH lab branding, G-15 cal file-listing bug fix, G-6 standalone `.exe` — all live-validated.** Full status in `docs/e5063a-gui-spec.md`; packaging `docs/e5063a-packaging.md`. | §5 / GUI-spec | ✅ COMPLETE | 2026-06-04 |
 | S-12 | ≥ 30 Hz mean validated on E5063A — measured **32.70 Hz** at variant B (300 kHz IFBW, REAL32 binary). All single-sweep variants A–D in expected range, zero SCPI errors. | §6.5 | ✅ Validated | 2026-05-28 |
 | S-12a | 60-min stability run at variant B | §6 | ⬜ Planned | — |
 | S-12b | Variant E (continuous + polling) deferred pending SRQ-based sync | §6.5 | ⏸ Deferred | 2026-05-28 |
@@ -1144,3 +1179,4 @@ in the upcoming real-world continuous-mode IFBW benchmark on E5063A.
 | 2026-06-02 | **Bugfix: single-sweep left the front-panel preview frozen.** The confidence/trace single sweep sets `:TRIG:SOUR BUS` + `:INIT1:CONT OFF` (Hold); on exit the E5063A stayed in Hold → front-panel live preview froze (user had to run `configure_e5063a.py` after `calibrate_e5063a.py` to recover). Fix: restore live free-run (`:ABOR`/`:TRIG:SOUR INT`/`:INIT1:CONT ON`) — in `calibrate_e5063a.py` BEFORE the `.sta` save (so the saved state is live too) and in `backend_e5063a.py` `restore_live()` (after ECal, on monitor/sanity stop, on close). Verified `:INIT1:CONT?`=1 / `:TRIG:SOUR?`=INT. Memory `project-e5063a-host-calibration` updated. | Claude (with Aunuun) |
 | 2026-06-02 | **Host-driven ECal validated → one-stop GUI scope confirmed (S-18).** In response to collaborator feedback (experiments need fast dynamic re-config + re-cal), evaluated whether configure + calibrate can be driven from the host: **yes, both.** Configure was already proven (`configure_e5063a.py`, S-11a/b). Wrote `code/ena-dev/scripts/calibrate_e5063a.py` (1-port S11 ECal via N7550A: geometry → `:ECAL:SOLT1 1`+`*OPC?` → verify → confidence sweep → grid-named `.sta` save, hot+host copy). Live run 14/14 OK on `MY54806798`; cal `.sta` round-trips through `configure_e5063a.py` (16/16 OK). Fixed a confidence-read bug (ASCII `:CALC:DATA:FDAT?` → `-410 Query INTERRUPTED`; switched to binary REAL32 per the proven bench pattern). §8.1 host-driven note added; new row S-18 (✅). Surfaced the IFBW≠re-cal clarification for the dynamic workflow. Next: GUI now scoped as Configure/Calibrate/Sanity/Continuous one-stop tool. | Claude (with Aunuun) |
 | 2026-06-02 | **GUI BUILT & live-validated — Phase 2 complete (S-10/S-11/S-17 → ✅).** Implemented the E5063A Data Collector under `code/ena-dev/gui/` (PySide6 MVP, two-screen Setup→Acquire + History page) across gui-spec phases **G-0…G-5**, all live-verified against `MY54806798` via qt-mcp: Configure + host ECal + recall, Verify preview, **Continuous Monitor → Dataflux CSV** (byte-compatible w/ `8_plot_monitor_data.py`, **39.1 Hz sustained, drift +0.32%/120 s**), Device Sanity Check → xlsx, History (list/delete/zip), filename composition, sci-notation toggle, stop-by Duration/Query-count/Manual + progress. Backend `E5063ABackend` on a dedicated QThread (NF-4). **Patterns learned (in gui-spec changelog + memory `project-e5063a-gui-ux` / `project-e5063a-host-calibration`):** (1) single-sweep trigger path is ~4× slower in-GUI than continuous → Monitor AND Sanity use the latched continuous read; (2) host kill mid-USBTMC-read → −420; resync on connect with `session.clear()`+`*CLS`+`:DISP:CCL`; the front-panel message is sticky (cleared by `:DISP:CCL`, separate from `:SYST:ERR?`); (3) restore live free-run on stop/close; (4) don't disable buttons on busy (controller serializes — clicks queue). Phase 5.5 → ✅; only gui-spec G-6 (`.exe`) remains. | Claude (with Aunuun) |
+| 2026-06-04 | **GUI COMPLETE — all remaining phases done + packaged (S-11 → ✅ COMPLETE).** Five phases, all live-validated vs `MY54806798`: **G-12** monitor scroller Y-axis toggle (freq↔magnitude, idle-only); **G-13** live S11 trace preview that free-runs from Proceed (mimics the instrument screen) + a `displaySelector` (live trace ⇄ min-scalar) — state-machine change: preview armed once via `monitor_begin` on Proceed, torn down on Back/close (NOT Stop), recording flag on Start/Stop; live-verified real trace + ~38.8 Hz + Back/close leave `INT/CONT 1`; **G-14** WTMH (NCKU) lab branding (window/taskbar + `.exe` icon + 28 px header emblem via `theme.TopBar(show_logo)`; assets `mvp/assets/WTMH.ico`+`wtmh_logo.png`); **G-15** calibration file-listing bug fix — `list_cal_files` queried `:MMEM:CAT? "D:\"` (trailing backslash) which **times out** → silently fell back to 2 hardcoded defaults → new/diff-config cals never listed; fix = query `:MMEM:CAT? "D:"` + fail-loud + refresh dropdown after ECal/recall + recall no longer clobbers the grid (save+load were always fine); **G-6** standalone `.exe` (auto-py-to-exe/PyInstaller One-Directory; needed `--exclude-module PyQt5 PyQt6` for the dual-binding abort + `--paths`/`--hidden-import` + a `sys.frozen` guard in `ena_dev_paths.py`; ⚠ target needs Keysight IO Libraries — VISA driver not bundleable). New diagnostics `ena-dev/scripts/{check_instrument_state,investigate_cal_files,investigate_cal_load}.py`; new doc `docs/e5063a-packaging.md`. Patterns in gui-spec §6.1/§6.2 + memory `project-e5063a-gui-ux`. | Claude (with Aunuun) |

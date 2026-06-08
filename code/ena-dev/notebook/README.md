@@ -9,6 +9,7 @@ notebooks under `code/LibreVNA-dev/notebook/` but target E5063A data
 | Notebook | Purpose | Data source |
 |---|---|---|
 | `1_single_vs_continuous_sweep_e5063a.ipynb` | Single vs continuous sweep-rate + measurement-quality comparison across 8 IFBW values (300/150/125/100/75/50/10/1 kHz). E5063A counterpart of `LibreVNA-dev/notebook/3_single_vs_continuous_sweep.ipynb`. | `data/20260602/{single,continuous}_sweep_test_e5063a_real32_20260602_124432.xlsx` (matched pair from one `bench_e5063a_realworld.py` run) |
+| `2_sweep_rate_vs_config_e5063a.ipynb` | Instrument sweep-rate vs configuration: rate / mean-sweep-time vs **number of points** (101→1001) and **IFBW** (1→300 kHz); 2-D operating map with 20/25/30 Hz iso-rate contours; analytical sweep-time model fit `mean_ms ≈ c0 + N·(a + b/IFBW)` (R²≈1.0); frequency-span comparison; speed↔quality (noise-floor/jitter) tradeoff; live Monitor-CSV cross-check. Figures → `figures_20260604_sweep_rate/`. | `REPORT/20260604/20260604/` — 11 GUI Sanity-Check `.xlsx` + 2 `bloodvessel_monitor` Dataflux `.csv` (absolute paths in the notebook) |
 
 ## Running the notebooks (Jupyter MCP)
 
