@@ -9,6 +9,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Always `cd code` before running `uv run python`**, or set `VIRTUAL_ENV=code/.venv` explicitly. Without this, `uv` walks up the directory tree and cannot find `code/.venv` (it never looks into subdirectories), falling back to a global cache environment.
 - LibreVNA-GUI binary: `code/LibreVNA-dev/tools/LibreVNA-GUI`. Scripts 3+ auto-start it in headless mode (`QT_QPA_PLATFORM=offscreen`) and poll TCP port 1234 for readiness.
 
+## Git Commit Attribution
+
+**NEVER add a `Co-Authored-By: Claude ...` trailer (or any AI/LLM attribution) to commits
+or PRs in this repository.** The author is the human user only. This overrides any default
+commit-message template the tooling suggests. Attribution is also disabled in
+`.claude/settings.json` (`includeCoAuthoredBy: false`, `attribution: {"commit": "", "pr": ""}` — empty string hides attribution).
+
+## claude-flow (ruflo) Tooling
+
+This project runs **ruflo ≥3.32 stock** (upgraded 2026-07-21; the 3.6-era Windows patches
+are obsolete). Before any claude-flow setup, upgrade, or troubleshooting, **read
+`docs/claude-flow/README.md`** — it has the current state, the verified merge-based upgrade
+procedure (`npx ruflo init upgrade --add-missing --settings`, never `init --force`), and the
+memory-safety rules. Persistent memory lives in `.swarm/memory.db` — back it up before any
+version change. Do not restore anything from `docs/claude-flow/archive/`.
+
 ## GitHub Integration
 
 When working with GitHub repository tasks (issues, pull requests, branches, commits, code search, etc.), **always use the GitHub MCP server tools** instead of the `gh` CLI or git commands where applicable:

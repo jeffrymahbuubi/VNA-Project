@@ -2,6 +2,16 @@
 
 A practical command reference for `npx ruflo@latest` (CLI) and the MCP tools available inside Claude Code sessions.
 
+> **⚠ 2026-07-21 STATUS NOTE — read [README.md](README.md) first for setup/upgrade.**
+> This document was written against ruflo **3.6.x**. The command reference below is still
+> broadly useful, but every *setup* section — "Windows Environment Setup" (three patches),
+> "Prevention — auto-memory-hook.mjs bug fix", "New Project Setup", "Setup Reference" —
+> is **HISTORICAL**: upstream absorbed all the Windows patches and hook fixes, and this
+> project now runs stock ruflo 3.32.9 helpers maintained by `npx ruflo init upgrade`.
+> Do **not** re-apply any patch described below, and do not pin `ruflo@3.6.10` anywhere.
+> Version-specific caveats ("not a subcommand in ruflo@3.6.10") may no longer hold —
+> check `npx ruflo <cmd> --help` against the installed version.
+
 > **Prefix note:** `claude-flow` is not globally installed. Always use `npx ruflo@latest <command>` from the terminal. Inside Claude Code, use MCP tools directly (no prefix needed).
 
 ---
@@ -220,7 +230,7 @@ node .claude/helpers/auto-memory-hook.mjs import
 
 If output 1 is `MISSING`, or output 2 says *"Memory package not available"*, the npm install is incomplete.
 
-**Fix:** Follow [New Project Setup](#new-project-setup) — add `"ruflo": "^3.6.10"` to `devDependencies` in `package.json` and run `npm install`. The `.mcp.json` config alone does not install the package locally; the auto-memory hook needs `@claude-flow/memory` physically present in `node_modules/`.
+**Fix:** Follow [New Project Setup](#new-project-setup) — add `"ruflo": "^3.30.0"` (or later; this project uses `^3.32.9`) to `devDependencies` in `package.json` and run `npm install`. The `.mcp.json` config alone does not install the package locally; the auto-memory hook needs `@claude-flow/memory` physically present in `node_modules/`.
 
 **Real case (2026-05-08, this project):** `package.json` had no `devDependencies` field. `node_modules/@claude-flow/` existed as an empty stub. After adding the dep + `npm install`, manual import produced `Imported 90 entries` and `auto-memory-store.json` (148 KB) was created with 13 MEMORY.md files sliced into 90 entries.
 
@@ -379,7 +389,13 @@ All three `SessionStart` hooks in `.claude/settings.json` use the `--skip-if-exi
 - `exec` replaces the shell process with node (no extra fork)
 - Bare `node .claude/helpers/...` (relative path) only works when CWD is the project root — fragile
 
-### Prevention — auto-memory-hook.mjs bug fix (critical)
+### Prevention — auto-memory-hook.mjs bug fix (critical) — ⚠ HISTORICAL (fixed upstream)
+
+> **⚠ OBSOLETE as of ruflo ≥3.30 (this project: 3.32.9, 2026-07-21).** The stock
+> `auto-memory-hook.mjs` shipped by `init upgrade` handles `--skip-if-exists` and
+> `import-all` correctly on all platforms. Do NOT re-apply the five changes below, and do
+> NOT restore `archive/auto-memory-hook.mjs` — it is older than the current stock file.
+> Kept for historical context only.
 
 > **Bug fixed 2026-04-30.** The `--skip-if-exists` flag in the hooks above was silently ignored until this fix was applied. Without it, 27 entries were imported unconditionally on every session open.
 
@@ -429,7 +445,13 @@ At session start you should see either `N imported` (first time or after changes
 
 ---
 
-## Windows Environment Setup
+## Windows Environment Setup — ⚠ PATCHES HISTORICAL, PREREQUISITES STILL VALID
+
+> **⚠ 2026-07-21:** The **three patches** below are OBSOLETE — ruflo ≥3.30 ships them
+> upstream (`init upgrade` writes stock, Windows-correct helpers; recent `init` also
+> generates the `cmd /c npx` MCP wrapper). The **prerequisites table** (Node 22, Git for
+> Windows `sh.exe`, MSVC build tools, long paths) is still valid and worth checking.
+> For current setup see [README.md](README.md).
 
 > **Read this BEFORE running `npm install` if you're on Windows.** The default doc above is Linux-flavoured. Windows needs three prerequisite tools and three patches to project files. Verified end-to-end on Windows 11 Pro 22631 on 2026-05-22 against ruflo@3.6.10.
 
@@ -664,7 +686,12 @@ Expected total time on a 100 Mbit connection: ~3 minutes (~2 min for `npm instal
 
 ---
 
-## New Project Setup
+## New Project Setup — ⚠ VERSION REFERENCES HISTORICAL
+
+> **⚠ 2026-07-21:** The structure of this section is still right (the hook needs ruflo in
+> local `node_modules/`, npm install, verify the bridge), but use `"ruflo": "^3.30.0"` or
+> later — **never** `^3.6.10` — and skip Step 3's "hook patch" (obsolete; stock files are
+> correct). Current procedure: [README.md](README.md) § "Fresh setup in a NEW project".
 
 > **Read this first when setting up claude-flow on a fresh project.** The auto-memory bridge has a foundational dependency that the `.mcp.json` and `settings.json` snippets in [Setup Reference](#setup-reference) do **not** cover.
 
@@ -738,7 +765,12 @@ The lockfile pins exact versions of `@claude-flow/memory`, `agentdb`, `better-sq
 
 ---
 
-## Setup Reference
+## Setup Reference — ⚠ HISTORICAL (pinned 3.6.10)
+
+> **⚠ 2026-07-21:** Superseded. Current `.mcp.json` uses `ruflo@latest` with the Windows
+> `cmd /c` wrapper and `npm_config_update_notifier=false` — see [README.md](README.md).
+> The "pin the version" advice below is dropped; `@latest` matches the nvidia-workshop
+> reference setup.
 
 ### Project `.mcp.json` (ruflo as MCP server)
 

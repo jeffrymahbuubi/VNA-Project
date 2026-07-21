@@ -42,3 +42,6 @@ code/ena_qt6_suite/
 
 # ─── Node ───
 node_modules/
+
+# ─── Local pre-upgrade backups (ruflo etc.) ───
+.backups/

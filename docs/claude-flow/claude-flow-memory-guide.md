@@ -10,8 +10,9 @@ Claude-flow provides session-based memory that persists across `/clear` commands
 
 | Store | Path | Purpose |
 |-------|------|---------|
+| **Main vector store** | `<project>/.swarm/memory.db` (+ `-wal`, `-shm`) | The sql.js + HNSW database behind `memory stats/list/search` — the primary persistent memory. **Back this up before any ruflo upgrade** (see [README.md](README.md)). |
 | Auto-memory files | `~/.claude/projects/<encoded-project>/memory/*.md` | Markdown notes — auto-loaded at every session start |
-| AgentDB / claude-flow | `<project>/.claude-flow/data/auto-memory-store.json` | Vector embeddings, session state |
+| AgentDB / claude-flow | `<project>/.claude-flow/data/auto-memory-store.json` | Auto-memory bridge store + import manifest |
 | Sessions | `<project>/.claude-flow/sessions/*.json` | Named session snapshots + auto-generated lifecycle records |
 
 - No external database process — ONNX vector embeddings run in-memory and persist to JSON
