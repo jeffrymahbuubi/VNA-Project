@@ -28,7 +28,12 @@ class BackendController(QObject):
     sigEcalDone = Signal(dict)
     sigTrace = Signal(object, object)            # freqs_hz, s11_db
     sigLiveTrace = Signal(object, object)        # G-13: full S11 trace per sweep (freqs_hz, s11_db)
-    sigMonitorPoint = Signal(float, float, float)  # preview_elapsed_s, min_freq_hz, mag_db
+    # Timestamp-fix F-1: first arg is the ACQUISITION-TIME stamp (int,
+    # time.perf_counter_ns(), QPC ~100 ns) taken right after the trace read on
+    # this thread — the GUI slot must NOT re-stamp on arrival (queued-signal +
+    # event-loop latency would pollute the data timestamps). QPC is system-wide,
+    # so comparing against an anchor captured on the GUI thread is valid.
+    sigMonitorPoint = Signal(object, float, float)  # stamp_ns, min_freq_hz, mag_db
     sigSanityTrace = Signal(object, object)      # freqs_hz, s11_db
     sigSanityRow = Signal(dict)                  # one IFBW's metrics
     sigSanityProgress = Signal(int)
@@ -44,7 +49,6 @@ class BackendController(QObject):
         self._be = None
         # monitor live-preview state (G-13)
         self._mon_timer: QTimer | None = None
-        self._mon_t0 = 0.0
         # sanity state
         self._san_timer: QTimer | None = None
         self._san_ifbws: List[int] = []
@@ -136,7 +140,6 @@ class BackendController(QObject):
         if self._mon_timer is None:
             self._mon_timer = QTimer(self)
             self._mon_timer.timeout.connect(self._preview_tick)
-        self._mon_t0 = time.monotonic()
         try:
             self._be.monitor_begin()   # arm continuous latched free-run (full rate)
         except Exception as exc:  # noqa: BLE001
@@ -166,10 +169,14 @@ class BackendController(QObject):
                 self._mon_timer.stop()
             self.sigError.emit("preview", str(exc))
             return
+        # F-1: stamp the sweep the instant its data is on the host — before any
+        # min-search or signal plumbing. perf_counter_ns = QPC (~100 ns), vs the
+        # old time.monotonic() = GetTickCount64 (15.625 ms tick, the 20260715
+        # report's root cause).
+        stamp_ns = time.perf_counter_ns()
         idx = min(range(len(s11)), key=lambda i: s11[i])
-        elapsed = time.monotonic() - self._mon_t0
         self.sigLiveTrace.emit(freqs, s11)               # full trace (live preview)
-        self.sigMonitorPoint.emit(elapsed, freqs[idx], s11[idx])  # min-S11 scalar
+        self.sigMonitorPoint.emit(stamp_ns, freqs[idx], s11[idx])  # min-S11 scalar
 
     # ── sanity loop ─────────────────────────────────────────
     @Slot(object, int)
@@ -193,7 +200,7 @@ class BackendController(QObject):
         except Exception as exc:  # noqa: BLE001
             self.sigError.emit("sanity set_ifbw", str(exc))
             return
-        self._san_last = time.monotonic()
+        self._san_last = time.perf_counter()
         self._san_timer.setInterval(0)
         self._san_timer.start()
 
@@ -205,7 +212,9 @@ class BackendController(QObject):
         self.sigSanityStopped.emit()
 
     def _san_tick(self):
-        t0 = time.monotonic()
+        # F-1: perf_counter (QPC, ~100 ns) — monotonic() on this Python/Windows
+        # ticks at 15.625 ms, useless for timing a ~25 ms sweep.
+        t0 = time.perf_counter()
         try:
             freqs, s11 = self._be.read_trace_continuous()
         except Exception as exc:  # noqa: BLE001
@@ -214,7 +223,7 @@ class BackendController(QObject):
             return
         # Time the SWEEP itself, not the inter-tick gap (which includes event-loop
         # scheduling idle) — else the benchmark over-reports the sweep time.
-        self._san_times.append(time.monotonic() - t0)
+        self._san_times.append(time.perf_counter() - t0)
         self._san_mins.append(min(s11))
         # Emit the full 801-pt trace only occasionally — plotting it on the GUI
         # thread every sweep contends with the controller thread for the GIL and
@@ -254,7 +263,7 @@ class BackendController(QObject):
             except Exception as exc:  # noqa: BLE001
                 self._san_timer.stop()
                 self.sigError.emit("sanity set_ifbw", str(exc))
-            self._san_last = time.monotonic()
+            self._san_last = time.perf_counter()
 
     @Slot()
     def doClose(self):

@@ -21,7 +21,8 @@ from PySide6.QtGui import QIcon
 from . import theme as T
 from . import dataflux
 from . import sanity_xlsx
-from .model import VNADataModel, AcquisitionMode, MonitorRecord
+from .model import VNADataModel, AcquisitionMode
+from .version import __version__
 from .view_setup import SetupPage
 from .view_acquire import AcquirePage
 from .view_files import FilesPage
@@ -54,7 +55,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("E5063A Data Collector")
+        self.setWindowTitle(f"E5063A Data Collector v{__version__}")
         if T.WTMH_ICO.exists():                       # G-14: WTMH window icon (titlebar)
             self.setWindowIcon(QIcon(str(T.WTMH_ICO)))
         self.resize(1080, 800)
@@ -82,13 +83,18 @@ class MainWindow(QMainWindow):
 
         # run state + elapsed clock (GUI thread, display only)
         self._running = False
-        self._t0 = 0.0
+        self._t0 = 0.0                      # perf_counter() at Start (display clock)
         self._mon_ts: list[float] = []
         self._mon_yvals: list[float] = []   # G-12: scalar scroller series (MHz or dB)
         self._mon_metric: str = "mag"       # G-12/G-13: "mag" (default) | "freq" (read at Start)
         self._recording: bool = False       # G-13: True between Start Record and Stop
-        self._mon_records: list[MonitorRecord] = []
-        self._mon_start_dt = datetime.now()
+        # Timestamp-fix (SPEC D-1/D-2/D-3): rows stream to a DatafluxWriter
+        # (bounded RAM, crash-durable) instead of an unbounded in-RAM list; row
+        # times = wall anchor at Start + (controller QPC stamp − QPC anchor).
+        self._writer: dataflux.DatafluxWriter | None = None
+        self._mon_count = 0                 # rows recorded this session (badges)
+        self._anchor_wall = datetime.now()  # wall-clock anchor captured at Start
+        self._anchor_ns = 0                 # perf_counter_ns() at the same instant
         self._mon_target_dur = 0.0
         self._mon_target_count = 0
         self._sanity_rows: list[dict] = []
@@ -279,7 +285,7 @@ class MainWindow(QMainWindow):
             self.model.monitor_config.display = a.acquire_display_mode()
             self.model.monitor_config.y_axis = self._mon_metric
             a.set_acquire_display(a.acquire_display_mode())
-            self._mon_ts.clear(); self._mon_yvals.clear(); self._mon_records.clear()
+            self._mon_ts.clear(); self._mon_yvals.clear(); self._mon_count = 0
             a.set_monitor_progress(0, "")          # reset any leftover run progress
             a.countLabel.setText("points: 0"); a.elapsedLabel.setText("00:00:00")
             a.saveStatusLabel.setText("Live preview — press Start Record to log.")
@@ -396,8 +402,7 @@ class MainWindow(QMainWindow):
             self._start_recording()
         else:
             self._running = True
-            self._t0 = time.monotonic()
-            self._mon_start_dt = datetime.now()
+            self._t0 = time.perf_counter()
             self.acquire_page.set_running(True)
             self.acquire_page.saveStatusLabel.setText("Benchmarking…")
             self._clock.start()
@@ -407,7 +412,7 @@ class MainWindow(QMainWindow):
 
     def _start_recording(self):
         """G-13: begin logging — the free-run preview is already running, so this only
-        flips the recording flag, resets the session buffers, and arms the stop rule."""
+        flips the recording flag, opens the streaming CSV writer, and arms the stop rule."""
         a = self.acquire_page
         # lock the min-scalar metric for this run (idle-only); preview keeps running.
         self._mon_metric = a.monitor_yaxis_metric()
@@ -415,28 +420,76 @@ class MainWindow(QMainWindow):
         mode = a.monitor_stop_mode()   # duration | count | manual
         self._mon_target_dur = a.durationInput.value() if mode == "duration" else 0.0
         self._mon_target_count = a.queryNumberInput.value() if mode == "count" else 0
-        self._mon_ts.clear(); self._mon_yvals.clear(); self._mon_records.clear()
-        self._mon_start_dt = datetime.now()
-        self._t0 = time.monotonic()
+        self._mon_ts.clear(); self._mon_yvals.clear(); self._mon_count = 0
+        # D-2: wall + QPC anchors captured back-to-back at Start. Row time =
+        # anchor_wall + (controller stamp − anchor_ns); Stop re-anchors to audit drift.
+        self._anchor_wall = datetime.now()
+        self._anchor_ns = time.perf_counter_ns()
+        self._t0 = time.perf_counter()
+        m = self.model
+        stamp = self._anchor_wall.strftime("%Y%m%d_%H%M%S")   # filename stamp = Start
+        name = m.filename.compose(m.mode, m.config, m.monitor_config, stamp, "csv")
+        try:
+            # D-3: file opens NOW; rows stream to disk during acquisition
+            # (bounded RAM; a crash keeps everything up to the last flush).
+            self._writer = dataflux.DatafluxWriter(
+                vna_model="E5063A",
+                vna_serial=m.device.serial_number or "MY54806798",
+                ifbw_hz=m.monitor_config.ifbw_hz,
+                start_hz=m.config.start_frequency,
+                stop_hz=m.config.stop_frequency,
+                num_points=m.config.num_points,
+                out_dir=str(self._resolve_data_dir()),
+                filename=name,
+                start_dt=self._anchor_wall,
+                scientific=m.scientific_notation,
+            )
+        except Exception as exc:  # noqa: BLE001
+            a.saveStatusLabel.setText(f"Cannot open CSV for recording: {exc}")
+            return
         self._recording = True
         self._running = True
         a.set_running(True)
         a.set_monitor_progress(0, "")
-        a.saveStatusLabel.setText("Recording…")
+        a.saveStatusLabel.setText(f"Recording → {self._writer.csv_path}")
         self._clock.start()
 
     def _stop_recording(self, note: str):
-        """G-13: stop logging and write the CSV; the live preview KEEPS running."""
+        """G-13: stop logging and finalize the CSV; the live preview KEEPS running."""
         if not self._recording:
             return
         self._recording = False
         self._running = False
         self._clock.stop()
         self.acquire_page.set_running(False)
-        if self._mon_records:
-            self._write_monitor_csv(note)
-        else:
+        self._finalize_writer(note)
+
+    def _finalize_writer(self, note: str):
+        """Drain + close the streaming writer, patch the header, report (with the
+        D-2 wall-vs-QPC drift audit). Safe to call with no writer active."""
+        w, self._writer = self._writer, None
+        if w is None:
             self.acquire_page.saveStatusLabel.setText(f"Stopped ({note}). No data recorded.")
+            return
+        try:
+            path, n, eff_ms = w.finalize()
+            if n == 0:
+                Path(path).unlink(missing_ok=True)   # empty run → no file
+                self.acquire_page.saveStatusLabel.setText(
+                    f"Stopped ({note}). No data recorded.")
+                return
+            # D-2 drift audit: wall clock vs QPC over the run (expected: ~ms-scale).
+            wall_s = (datetime.now() - self._anchor_wall).total_seconds()
+            perf_s = (time.perf_counter_ns() - self._anchor_ns) / 1e9
+            drift_ms = (wall_s - perf_s) * 1000.0
+            print(f"[monitor] {n} rows -> {path} | eff {eff_ms:.2f} ms/pt | "
+                  f"wall-vs-QPC drift {drift_ms:+.1f} ms over {perf_s:.0f} s")
+            rate = 1000.0 / eff_ms if eff_ms else 0.0
+            self.acquire_page.saveStatusLabel.setText(
+                f"Saved {n} pts ({eff_ms:.1f} ms/pt ≈ {rate:.1f} Hz, "
+                f"clock drift {drift_ms:+.1f} ms) → {path}")
+        except Exception as exc:  # noqa: BLE001
+            self.acquire_page.saveStatusLabel.setText(f"CSV write failed: {exc}")
 
     def _on_stop(self):
         if self.model.mode is AcquisitionMode.MONITOR:
@@ -468,25 +521,31 @@ class MainWindow(QMainWindow):
             a.set_monitor_curve([], [])
 
     def _tick_clock(self):
-        elapsed = time.monotonic() - self._t0
+        elapsed = time.perf_counter() - self._t0
         self.acquire_page.elapsedLabel.setText(time.strftime("%H:%M:%S", time.gmtime(elapsed)))
 
-    def _on_monitor_point(self, _preview_elapsed, f0, mag):
+    def _on_monitor_point(self, stamp_ns, f0, mag):
         # G-13: the live notch readouts update every preview sweep, recording or not.
+        # F-1: `stamp_ns` is the acquisition-time perf_counter_ns() stamp taken on
+        # the controller thread — never re-stamp here (GUI event-loop latency).
         a = self.acquire_page
         a.minFreqBadge.set_value(f"{f0/1e6:.3f}")
         a.magBadge.set_value(f"{mag:.2f}")
         if not self._recording:
             return
-        # Recording session: log + min-scalar scroller + stop conditions (elapsed since Start).
-        rec_elapsed = time.monotonic() - self._t0
-        self._mon_records.append(MonitorRecord(
-            self._mon_start_dt + timedelta(seconds=rec_elapsed), f0, mag))
+        # Recording session: stream row + min-scalar scroller + stop conditions.
+        rec_elapsed = (stamp_ns - self._anchor_ns) / 1e9    # s since Start, QPC-true
+        if rec_elapsed < 0:
+            return   # preview sweep acquired before Start was pressed — not part of the run
+        if self._writer is not None:
+            self._writer.append(
+                self._anchor_wall + timedelta(seconds=rec_elapsed), f0, mag)
+        self._mon_count += 1
         yval = mag if self._mon_metric == "mag" else f0 / 1e6
         self._mon_ts.append(rec_elapsed); self._mon_yvals.append(yval)
-        if len(self._mon_ts) > 600:   # plot window only; _mon_records keeps all
+        if len(self._mon_ts) > 600:   # plot window only; the CSV on disk keeps all
             self._mon_ts = self._mon_ts[-600:]; self._mon_yvals = self._mon_yvals[-600:]
-        n = len(self._mon_records)
+        n = self._mon_count
         if self.model.monitor_config.display == "minimum":
             a.set_monitor_curve(self._mon_ts, self._mon_yvals)
         a.countLabel.setText(f"points: {n}")
@@ -548,8 +607,8 @@ class MainWindow(QMainWindow):
         self._clock.stop()
         self.acquire_page.set_running(False)
         m = self.model
-        if m.mode is AcquisitionMode.MONITOR and self._mon_records:
-            self._write_monitor_csv(note)
+        if m.mode is AcquisitionMode.MONITOR:
+            self._finalize_writer(note)   # streams already on disk; drain + patch header
         elif m.mode is AcquisitionMode.SANITY and self._sanity_rows:
             self._write_sanity_xlsx(note)
         else:
@@ -561,36 +620,6 @@ class MainWindow(QMainWindow):
         if not base.is_absolute():
             base = Path(_ENA_DEV) / "data"   # canonical ena-dev/data (ux-spec OQ-3)
         return base / datetime.now().strftime("%Y%m%d")
-
-    def _write_monitor_csv(self, note: str):
-        m = self.model
-        recs = self._mon_records
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = m.filename.compose(m.mode, m.config, m.monitor_config, stamp, "csv")
-        if len(recs) > 1:
-            span = (recs[-1].timestamp - recs[0].timestamp).total_seconds()
-            eff_ms = 1000.0 * span / (len(recs) - 1)
-        else:
-            eff_ms = 0.0
-        try:
-            path = dataflux.write_dataflux_csv(
-                recs,
-                vna_model="E5063A",
-                vna_serial=m.device.serial_number or "MY54806798",
-                ifbw_hz=m.monitor_config.ifbw_hz,
-                eff_log_interval_ms=eff_ms,
-                start_hz=m.config.start_frequency,
-                stop_hz=m.config.stop_frequency,
-                num_points=m.config.num_points,
-                out_dir=str(self._resolve_data_dir()),
-                filename=name,
-                scientific=m.scientific_notation,
-            )
-            rate = 1000.0 / eff_ms if eff_ms else 0.0
-            self.acquire_page.saveStatusLabel.setText(
-                f"Saved {len(recs)} pts ({eff_ms:.0f} ms/pt ≈ {rate:.1f} Hz) → {path}")
-        except Exception as exc:  # noqa: BLE001
-            self.acquire_page.saveStatusLabel.setText(f"CSV write failed: {exc}")
 
     def _write_sanity_xlsx(self, note: str):
         m = self.model
@@ -679,6 +708,11 @@ class MainWindow(QMainWindow):
 
     # ── shutdown ────────────────────────────────────────────
     def closeEvent(self, event):
+        # Closing mid-recording: finalize the streaming CSV first (drain queue +
+        # patch header) so the run on disk is complete, not placeholder-headed.
+        if self._writer is not None:
+            self._recording = False
+            self._finalize_writer("window closed")
         # Run teardown (stop timers + restore live free-run + close session)
         # SYNCHRONOUSLY on the controller thread BEFORE quitting it. The old code
         # emitted reqClose (queued, cross-thread) then immediately quit the thread,
