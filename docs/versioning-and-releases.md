@@ -77,6 +77,63 @@ number lives. Consumers:
 8. Sanity: download the asset on another machine, check the window title shows
    the same version.
 
+## 6.1 Exact commands — releasing v1.1.0 (copy-paste playbook)
+
+Prerequisite once per machine: `gh auth status` shows "Logged in" (it does on
+this PC — account `jeffrymahbuubi`). All commands from the repo root
+(`CODE/VNA-Project/`) in PowerShell unless noted.
+
+```powershell
+# ── 1. Bump the version (drop -dev) ──────────────────────────────
+#   Edit code/ena-dev/gui/mvp/version.py →  __version__ = "1.1.0"
+
+# ── 2. Update the records ────────────────────────────────────────
+#   CHANGELOG.md : retitle "[Unreleased] — v1.1.0 draft" → "[1.1.0] — YYYY-MM-DD"
+#   docs/versioning-and-releases.md §3 : fill v1.1.0's commit + date
+
+# ── 3. Commit + tag + push ───────────────────────────────────────
+git add code/ena-dev/gui/mvp/version.py CHANGELOG.md docs/versioning-and-releases.md
+git commit -m "chore(release): v1.1.0"
+git tag -a v1.1.0 -m "v1.1.0 - timestamp-integrity fix (QPC stamps + streaming CSV)"
+git push origin main v1.1.0
+
+# ── 4. Rebuild + zip the exe with the final version ─────────────
+cd code\ena-dev\gui
+..\..\..\code\.venv\Scripts\pyinstaller.exe --noconfirm E5063A-Data-Collector.spec
+Compress-Archive -Path dist\E5063A-Data-Collector `
+                 -DestinationPath dist\E5063A-Data-Collector-v1.1.0-win64.zip -Force
+#   Sanity: run dist\E5063A-Data-Collector\E5063A-Data-Collector.exe once —
+#   title must read "E5063A Data Collector v1.1.0" (no -dev).
+cd ..\..\..
+
+# ── 5. Create the GitHub Release with the zip attached ──────────
+gh release create v1.1.0 `
+  "code\ena-dev\gui\dist\E5063A-Data-Collector-v1.1.0-win64.zip" `
+  --title "v1.1.0 - Timestamp-integrity fix" `
+  --notes-file release-notes.md          # or: --notes "text..."
+#   release-notes.md = the [1.1.0] section copied from CHANGELOG.md
+#   (write it anywhere temporary; it is not committed).
+
+# ── 6. Verify ────────────────────────────────────────────────────
+gh release view v1.1.0 --web    # opens the release page in the browser
+```
+
+Useful variants:
+
+```powershell
+gh release list                                  # all releases
+gh release edit v1.1.0 --notes-file new.md       # fix the notes afterwards
+gh release upload v1.1.0 path\to\extra.zip       # attach another asset
+gh release create v1.1.0 --draft ...             # draft first, publish from the web UI
+```
+
+Notes-only release (no binary) — how v1.0.0 was published, since its original
+2026-06-04 exe was not preserved (dist/ is rebuilt in place and gitignored):
+
+```powershell
+gh release create v1.0.0 --title "..." --notes-file notes.md   # tag must already exist
+```
+
 ## 7. Conventions
 
 - Tags: `vX.Y.Z` (leading `v`), annotated (`git tag -a`).
