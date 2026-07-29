@@ -137,4 +137,5 @@ dist/E5063A-Data-Collector/
 ## 8. Changelog
 | Date | Change | By |
 |------|--------|-----|
+| 2026-07-24 | **Rebuild with the timestamp fix + versioning (v1.1.0-dev).** `pyinstaller --noconfirm E5063A-Data-Collector.spec` rebuilt cleanly (~2.5 min) with the QPC-timestamp/streaming-CSV code and `mvp/version.py`; launched → stable 204 MB, title "E5063A Data Collector v1.1.0-dev", graceful close. Zip naming convention adopted: `Compress-Archive dist/E5063A-Data-Collector → dist/E5063A-Data-Collector-v<X.Y.Z>-win64.zip` (135.4 MB) — the artifact attached to GitHub Releases (`docs/versioning-and-releases.md` §6.1 has the full command playbook). | Claude (with Aunuun) |
 | 2026-06-04 | G-6 built + validated. `sys.frozen` guard added to `ena_dev_paths.py`; PyInstaller One-Directory build with `--paths`×3 + hidden-imports×4 + `--exclude-module PyQt5/PyQt6` + `--add-data mvp/assets` + WTMH `.ico`. Launched the `.exe`: window + WTMH branding + full UI render. auto-py-to-exe field guide (§2) + validated CLI/.spec (§3). IO-Libraries prerequisite documented (§1). | Claude (with Aunuun) |

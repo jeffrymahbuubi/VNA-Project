@@ -1,8 +1,13 @@
 # E5063A Data Collector — Timestamp Integrity Fix SPEC
 
 **Status:** IMPLEMENTED (F-1…F-5) + headless-validated 2026-07-24 — pending live-instrument
-pass + multi-hour re-validation (§6) + `.exe` rebuild
+pass + multi-hour re-validation (§6), then release **v1.1.0**
 **Date:** 2026-07-24 (spec + implementation same day)
+**State of the world:** fix committed+pushed (`4203d78`); **v1.1.0-dev `.exe` rebuilt,
+validated (title shows v1.1.0-dev) and zipped** (`E5063A-Data-Collector-v1.1.0-dev-win64.zip`,
+135 MB) — this is the build to take to the instrument for §6. Versioning/release process:
+`docs/versioning-and-releases.md` (§6.1 = exact v1.1.0 release commands); v1.0.0 retro-tag +
+GitHub Release published 2026-07-24.
 
 > **Implementation notes (2026-07-24):**
 > - `verify_timestamp_fix.py` ALL CHECKS PASSED: writer unit test (5000 rows,
