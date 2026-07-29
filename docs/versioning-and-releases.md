@@ -136,6 +136,12 @@ gh release create v1.0.0 --title "..." --notes-file notes.md   # tag must alread
 
 ## 7. Conventions
 
+- **Release notes: ONE source line per paragraph/bullet — never hard-wrap.**
+  GitHub renders release notes (like issues/comments) with single newlines as
+  forced `<br>` line breaks, so ~78-char-wrapped prose displays as ragged short
+  lines. This differs from repo files (`README`/`docs/*.md`), where single
+  newlines are soft and text reflows — hard-wrapping stays fine THERE.
+  (Learned 2026-07-29: both releases had to be re-edited to fix this.)
 - Tags: `vX.Y.Z` (leading `v`), annotated (`git tag -a`).
 - Retro-tagging is fine and was used for `v1.0.0` (`git tag -a v1.0.0 f1b0cf3`)
   — the de-facto distributed build deserves a name even though tagging came later.
