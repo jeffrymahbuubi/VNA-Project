@@ -10,4 +10,4 @@ Consumers: main_window.py window title; release zip naming
 NEVER carry this value (12-line byte-compatible layout is locked).
 """
 
-__version__ = "1.1.0-dev"
+__version__ = "1.1.0"

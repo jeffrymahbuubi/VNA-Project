@@ -6,10 +6,11 @@ versioning follows [SemVer](https://semver.org) as interpreted in
 `docs/versioning-and-releases.md` (MAJOR = data-contract break, MINOR =
 functional change to recorded data, PATCH = cosmetic).
 
-## [Unreleased] — v1.1.0 draft (timestamp-integrity fix)
+## [1.1.0] — 2026-07-29 (timestamp-integrity fix)
 
-Pending live-instrument pass + multi-hour re-validation
-(`docs/e5063a-timestamp-fix-spec.md` §6) + `.exe` rebuild before tagging.
+Released ahead of the long-duration field validation so the build can be
+distributed and cited; multi-hour re-validation by the collaborator is the
+remaining acceptance step (`docs/e5063a-timestamp-fix-spec.md` §6).
 
 ### Changed
 - **Monitor timestamps are now QPC-true (~100 ns resolution).** Rows are stamped

@@ -35,7 +35,7 @@ that distinction is the whole value for a lab tool. Pre-release builds use a
 | Version | Commit | Date | What / why |
 |---|---|---|---|
 | `v1.0.0` | `f1b0cf3` (retro-tagged) | 2026-06-04 | First field version: packaged GUI G-0…G-15 + G-6 `.exe`. The build behind the professor's 18 h/24 h recordings. **Known issue:** timestamp instability (20260715 report). |
-| `v1.1.0` | *(pending)* | *(after live + multi-hour validation)* | Timestamp-integrity fix: QPC (`perf_counter_ns`) stamps at acquisition, streaming Dataflux CSV (bounded RAM, crash-durable), wall-vs-QPC drift audit. Filename stamp now = Start time. |
+| `v1.1.0` | tagged 2026-07-29 | 2026-07-29 | Timestamp-integrity fix: QPC (`perf_counter_ns`) stamps at acquisition, streaming Dataflux CSV (bounded RAM, crash-durable), wall-vs-QPC drift audit. Filename stamp now = Start time. Released ahead of the collaborator's multi-hour field validation (headless-verified; acceptance metrics in timestamp-fix-spec §6). |
 
 Keep this table AND `CHANGELOG.md` updated together; the changelog is the
 detailed record, this table is the at-a-glance map.
